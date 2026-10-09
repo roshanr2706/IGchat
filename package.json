@@ -1,0 +1,42 @@
+{
+  "name": "igchat",
+  "productName": "IGchat",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lightweight Discord-style Instagram DM client",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.node.json && svelte-check --tsconfig ./tsconfig.web.json --threshold error",
+    "dist": "electron-vite build && electron-builder --win"
+  },
+  "build": {
+    "appId": "dev.igchat.app",
+    "productName": "IGchat",
+    "files": [
+      "out/**/*"
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^6.2.4",
+    "@testing-library/svelte": "^5.4.2",
+    "@testing-library/user-event": "^14.6.7",
+    "@types/node": "^24.19.1",
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "jsdom": "^30.1.2",
+    "svelte": "^5.57.2",
+    "svelte-check": "^4.7.6",
+    "typescript": "^6.0.3",
+    "vite": "^7.3.7",
+    "vitest": "^5.0.3"
+  }
+}
