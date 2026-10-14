@@ -1,16 +1,30 @@
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { join } from 'node:path';
+import { SETTINGS_SYNC_CHANNEL } from '../shared/ipc';
+import type { ChatService } from './chatService';
+import { createHandlers, TITLEBAR_HEIGHT } from './handlers';
+import { forwardEvents, registerIpc } from './ipc';
+import { MockChatService } from './mock/mockService';
+import { SettingsStore } from './settingsStore';
+
+if (!app.requestSingleInstanceLock()) app.quit();
+
+const settings = new SettingsStore(join(app.getPath('userData'), 'settings.json'));
+// Plan 2 swaps this for the Instagram-backed service.
+const service: ChatService = new MockChatService();
+let mainWindow: BrowserWindow | null = null;
 
 function createWindow(): BrowserWindow {
+  const { windowColors } = settings.get();
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 480,
     minHeight: 400,
     show: false,
-    backgroundColor: '#313338',
+    backgroundColor: windowColors.base,
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#1e1f22', symbolColor: '#dbdee1', height: 32 },
+    titleBarOverlay: { color: windowColors.titlebar, symbolColor: windowColors.symbol, height: TITLEBAR_HEIGHT },
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -19,8 +33,11 @@ function createWindow(): BrowserWindow {
     }
   });
   win.once('ready-to-show', () => win.show());
+  win.on('closed', () => {
+    if (mainWindow === win) mainWindow = null;
+  });
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('https://')) void shell.openExternal(url);
+    if (/^https:\/\//i.test(url)) void shell.openExternal(url);
     return { action: 'deny' };
   });
   win.webContents.on('will-navigate', (event) => event.preventDefault());
@@ -29,13 +46,30 @@ function createWindow(): BrowserWindow {
   return win;
 }
 
+ipcMain.on(SETTINGS_SYNC_CHANNEL, (event) => {
+  event.returnValue = settings.get();
+});
+registerIpc(
+  ipcMain,
+  createHandlers({ service, settings, getWindow: () => mainWindow, themesDir: join(app.getPath('userData'), 'themes') })
+);
+forwardEvents(service, () => mainWindow?.webContents ?? null);
+
+app.on('second-instance', () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+});
+
 app.whenReady().then(() => {
-  createWindow();
+  mainWindow = createWindow();
+  service.start();
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow();
   });
 });
 
 app.on('window-all-closed', () => {
+  service.stop();
   if (process.platform !== 'darwin') app.quit();
 });
