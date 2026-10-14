@@ -35,6 +35,48 @@ describe('MockChatService', () => {
     expect(ids.size).toBe(60);
   });
 
+  it('keeps the paging cursor valid when the oldest served message is unsent', async () => {
+    const mk = () => new MockChatService({ now: () => clock, latencyMs: 0, incomingEveryMs: 0 });
+    const probe = mk();
+    let threadId = '';
+    for (const t of (await probe.getInbox()).items) {
+      const p = await probe.openThread(t.id);
+      if (p.hasOlder && p.messages[0]!.senderId === 'me') {
+        threadId = t.id;
+        break;
+      }
+    }
+    expect(threadId).not.toBe('');
+    const ref = mk();
+    await ref.openThread(threadId);
+    const expectedPage = await ref.loadOlder(threadId);
+    const expected = expectedPage.messages;
+
+    const fresh = mk();
+    const page = await fresh.openThread(threadId);
+    await fresh.unsendMessage(threadId, page.messages[0]!.id);
+    const older = await fresh.loadOlder(threadId);
+    expect(older.messages.map((m) => m.id)).toEqual(expected.map((m) => m.id));
+    expect(older.hasOlder).toBe(expectedPage.hasOlder);
+  });
+
+  it('pages without overlap or gap when a message is appended between openThread and loadOlder', async () => {
+    const t = (await svc.getInbox()).items[0]!;
+    const page = await svc.openThread(t.id);
+    await svc.sendText(t.id, 'appended', null);
+    const older = await svc.loadOlder(t.id);
+    const firstIds = new Set(page.messages.map((m) => m.id));
+    expect(older.messages.some((m) => firstIds.has(m.id))).toBe(false);
+    expect(older.messages).toHaveLength(30);
+    // no gap: the last older message directly precedes page[0] in the full history
+    const ref = new MockChatService({ now: () => clock, latencyMs: 0, incomingEveryMs: 0 });
+    const refFirst = await ref.openThread(t.id);
+    const refOlder = await ref.loadOlder(t.id);
+    expect(older.messages.map((m) => m.id)).toEqual(refOlder.messages.map((m) => m.id));
+    expect(older.messages[older.messages.length - 1]!.id).toBe(refOlder.messages[refOlder.messages.length - 1]!.id);
+    expect(refFirst.messages[0]!.id).toBe(page.messages[0]!.id);
+  });
+
   it('sends text, updates the inbox and supports replies', async () => {
     const updated = vi.fn();
     svc.on('inbox:updated', updated);

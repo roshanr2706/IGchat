@@ -14,6 +14,12 @@ export class Emitter<M extends { [K in keyof M]: AnyFn }> {
   }
 
   emit<K extends keyof M>(event: K, ...args: Parameters<M[K]>): void {
-    for (const fn of this.listeners.get(event) ?? []) fn(...args);
+    for (const fn of [...(this.listeners.get(event) ?? [])]) {
+      try {
+        fn(...args);
+      } catch (err) {
+        console.error('[emitter]', err);
+      }
+    }
   }
 }

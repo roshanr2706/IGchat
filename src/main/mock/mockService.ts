@@ -164,6 +164,11 @@ export class MockChatService implements ChatService {
     const index = list.findIndex((m) => m.id === messageId);
     if (index < 0) throw new ServiceError('NotFound', 'Message not found');
     if (list[index]!.senderId !== ME.id) throw new ServiceError('Unknown', 'You can only unsend your own messages');
+    if (this.oldestServed.get(threadId) === messageId) {
+      const next = list[index + 1];
+      if (next) this.oldestServed.set(threadId, next.id);
+      else this.oldestServed.delete(threadId);
+    }
     list.splice(index, 1);
     this.refreshPreview(threadId);
   }
