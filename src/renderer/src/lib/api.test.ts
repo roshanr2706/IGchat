@@ -40,4 +40,24 @@ describe('api', () => {
     expect(bridge.calls).toEqual([{ channel: 'thread:markSeen', args: ['t9'] }]);
     expect(initialSettings()).toEqual(DEFAULT_SETTINGS);
   });
+
+  it('rejects non-cloneable arguments like real IPC (e.g. reactive proxies)', async () => {
+    setBridge(createFakeBridge({ 'settings:set': (patch) => ({ ...DEFAULT_SETTINGS, ...patch }) }));
+    const proxy = new Proxy({}, {});
+    await expect(call('settings:set', proxy as never)).rejects.toMatchObject({ code: 'Unknown' });
+  });
+
+  it('clones arguments and results so handlers cannot share references', async () => {
+    const stored = { themeId: 'nord' };
+    setBridge(createFakeBridge({ 'settings:set': () => stored as never }));
+    const arg = { themeId: 'dark' };
+    const result = await call('settings:set', arg);
+    expect(result).toEqual(stored);
+    expect(result).not.toBe(stored);
+  });
+
+  it('maps plain errors to their message', async () => {
+    setBridge(createFakeBridge({ 'inbox:get': () => { throw new Error('boom'); } }));
+    await expect(call('inbox:get')).rejects.toMatchObject({ code: 'Unknown', message: 'boom' });
+  });
 });

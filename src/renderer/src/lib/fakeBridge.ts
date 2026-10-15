@@ -21,14 +21,21 @@ export function createFakeBridge(handlers: FakeHandlers = {}, settings: Settings
     initialCustomThemes: customThemes,
     calls,
     async invoke(channel, ...args) {
-      calls.push({ channel, args });
+      let cloned: unknown[];
+      try {
+        // Real IPC structured-clones arguments; reactive proxies and functions fail here too.
+        cloned = structuredClone(args);
+      } catch (err) {
+        return { ok: false, code: 'Unknown', message: err instanceof Error ? err.message : String(err) };
+      }
+      calls.push({ channel, args: cloned });
       const handler = handlers[channel] as ((...a: unknown[]) => unknown) | undefined;
       if (!handler) return { ok: false, code: 'Unknown', message: `No fake handler for ${channel}` };
       try {
-        return { ok: true, value: await handler(...args) } as Result<never>;
+        return { ok: true, value: structuredClone(await handler(...cloned)) } as Result<never>;
       } catch (err) {
         if (err instanceof IgError) return { ok: false, code: err.code, message: err.message };
-        return { ok: false, code: 'Unknown', message: String(err) };
+        return { ok: false, code: 'Unknown', message: err instanceof Error ? err.message : String(err) };
       }
     },
     on(event, listener) {
