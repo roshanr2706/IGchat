@@ -3,10 +3,10 @@ import { join } from 'node:path';
 import { SETTINGS_SYNC_CHANNEL } from '../shared/ipc';
 import type { ChatService } from './chatService';
 import { createHandlers, TITLEBAR_HEIGHT } from './handlers';
-import { loadCustomThemes } from './customThemes';
 import { forwardEvents, registerIpc } from './ipc';
 import { MockChatService } from './mock/mockService';
 import { SettingsStore } from './settingsStore';
+import { startupPayload } from './startupPayload';
 
 function start(): void {
   const settings = new SettingsStore(join(app.getPath('userData'), 'settings.json'));
@@ -48,7 +48,7 @@ function start(): void {
   }
 
   ipcMain.on(SETTINGS_SYNC_CHANNEL, (event) => {
-    event.returnValue = { settings: settings.get(), customThemes: loadCustomThemes(themesDir).themes };
+    event.returnValue = startupPayload(settings.get(), themesDir);
   });
   registerIpc(
     ipcMain,
