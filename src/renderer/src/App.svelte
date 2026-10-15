@@ -51,6 +51,7 @@
 
   // Keep the native window background / title-bar buttons in sync with the theme.
   $effect(() => {
+    if (!themes.resolved) return;
     const wanted = windowColorsFor(themes.active);
     const current = settings.value.windowColors;
     if (wanted.base !== current.base || wanted.titlebar !== current.titlebar || wanted.symbol !== current.symbol) {

@@ -1,5 +1,6 @@
 import type { Bridge, EventChannel, EventMap, InvokeArgs, InvokeChannel, InvokeReturn, Result } from '../../../shared/ipc';
 import { DEFAULT_SETTINGS, sanitizeSettings, type Settings } from '../../../shared/settings';
+import type { ThemeDef } from '../../../shared/theme';
 import { IgError } from './api';
 
 export type FakeHandlers = Partial<{
@@ -12,11 +13,12 @@ export type FakeBridge = Bridge & {
 };
 
 /** In-memory Bridge for renderer tests. Handlers may throw IgError to simulate a coded failure. */
-export function createFakeBridge(handlers: FakeHandlers = {}, settings: Settings = DEFAULT_SETTINGS): FakeBridge {
+export function createFakeBridge(handlers: FakeHandlers = {}, settings: Settings = DEFAULT_SETTINGS, customThemes: ThemeDef[] = []): FakeBridge {
   const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
   const calls: FakeBridge['calls'] = [];
   return {
     initialSettings: sanitizeSettings(settings),
+    initialCustomThemes: customThemes,
     calls,
     async invoke(channel, ...args) {
       calls.push({ channel, args });

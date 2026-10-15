@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { SETTINGS_SYNC_CHANNEL } from '../shared/ipc';
 import type { ChatService } from './chatService';
 import { createHandlers, TITLEBAR_HEIGHT } from './handlers';
+import { loadCustomThemes } from './customThemes';
 import { forwardEvents, registerIpc } from './ipc';
 import { MockChatService } from './mock/mockService';
 import { SettingsStore } from './settingsStore';
@@ -13,6 +14,7 @@ const settings = new SettingsStore(join(app.getPath('userData'), 'settings.json'
 // Plan 2 swaps this for the Instagram-backed service.
 const service: ChatService = new MockChatService();
 let mainWindow: BrowserWindow | null = null;
+const themesDir = join(app.getPath('userData'), 'themes');
 
 function createWindow(): BrowserWindow {
   const { windowColors } = settings.get();
@@ -47,11 +49,11 @@ function createWindow(): BrowserWindow {
 }
 
 ipcMain.on(SETTINGS_SYNC_CHANNEL, (event) => {
-  event.returnValue = settings.get();
+  event.returnValue = { settings: settings.get(), customThemes: loadCustomThemes(themesDir).themes };
 });
 registerIpc(
   ipcMain,
-  createHandlers({ service, settings, getWindow: () => mainWindow, themesDir: join(app.getPath('userData'), 'themes') })
+  createHandlers({ service, settings, getWindow: () => mainWindow, themesDir })
 );
 forwardEvents(service, () => mainWindow?.webContents ?? null);
 

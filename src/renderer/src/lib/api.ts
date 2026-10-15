@@ -1,5 +1,6 @@
 import type { Bridge, ErrorCode, EventChannel, EventMap, InvokeArgs, InvokeChannel, InvokeReturn } from '../../../shared/ipc';
 import type { Settings } from '../../../shared/settings';
+import type { ThemeDef } from '../../../shared/theme';
 
 export class IgError extends Error {
   constructor(
@@ -35,4 +36,8 @@ export function on<E extends EventChannel>(event: E, listener: EventMap[E]): () 
 
 export function initialSettings(): Settings {
   return current().initialSettings;
+}
+
+export function initialCustomThemes(): ThemeDef[] {
+  return current().initialCustomThemes;
 }

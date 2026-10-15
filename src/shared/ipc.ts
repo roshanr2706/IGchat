@@ -77,6 +77,8 @@ export const SETTINGS_SYNC_CHANNEL = 'settings:getSync';
 /** The object the preload exposes as `window.ig`. */
 export interface Bridge {
   initialSettings: Settings;
+  /** Custom themes, delivered with the synchronous startup payload so a saved custom theme paints correctly on first frame. */
+  initialCustomThemes: ThemeDef[];
   invoke<C extends InvokeChannel>(channel: C, ...args: InvokeArgs<C>): Promise<Result<InvokeReturn<C>>>;
   on<E extends EventChannel>(event: E, listener: EventMap[E]): () => void;
 }
