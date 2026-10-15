@@ -6,8 +6,12 @@
   import { themes } from '../stores/themes.svelte';
   import { ui } from '../stores/ui.svelte';
   import { SYSTEM_THEME_ID } from '../themes/apply';
+  import { BUILTIN_THEMES } from '../themes/builtin';
 
   const FONT_LABELS: Record<number, string> = { 0.875: 'Small', 1: 'Default', 1.125: 'Large', 1.25: 'Extra large' };
+
+  const lightBase = BUILTIN_THEMES.find((t) => t.id === 'light')!.tokens['bg-base'];
+  const darkBase = BUILTIN_THEMES.find((t) => t.id === 'dark')!.tokens['bg-base'];
 
   function close(): void {
     ui.settingsOpen = false;
@@ -45,7 +49,7 @@
       <h3>Theme</h3>
       <div class="themes">
         <button class="theme" class:selected={settings.value.themeId === SYSTEM_THEME_ID} onclick={() => themes.select(SYSTEM_THEME_ID)}>
-          <span class="swatch system"></span>
+          <span class="swatch system" style:background="linear-gradient(135deg, {lightBase} 0 50%, {darkBase} 50% 100%)"></span>
           <span>System</span>
         </button>
         {#each themes.all as theme (theme.id)}
@@ -193,9 +197,6 @@
     width: 40%;
     height: 10px;
     border-radius: 5px;
-  }
-  .swatch.system {
-    background: linear-gradient(135deg, #ffffff 0 50%, #313338 50% 100%);
   }
   .hint {
     margin: 10px 0;

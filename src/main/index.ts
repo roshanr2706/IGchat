@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
 import { join } from 'node:path';
 import { SETTINGS_SYNC_CHANNEL } from '../shared/ipc';
 import type { ChatService } from './chatService';
@@ -63,6 +63,9 @@ function start(): void {
   });
 
   app.whenReady().then(() => {
+    // Deny every permission request (camera, notifications, etc.); the app needs none.
+    session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+    session.defaultSession.setPermissionCheckHandler(() => false);
     mainWindow = createWindow();
     service.start();
     app.on('activate', () => {

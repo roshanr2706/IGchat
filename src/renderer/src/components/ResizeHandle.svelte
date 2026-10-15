@@ -12,6 +12,7 @@
   let dragging = $state(false);
   let startX = 0;
   let startWidth = 0;
+  let lastWidth = 0;
 
   function compute(e: PointerEvent): number {
     const dx = e.clientX - startX;
@@ -24,17 +25,27 @@
     dragging = true;
     startX = e.clientX;
     startWidth = width;
+    lastWidth = width;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
 
   function move(e: PointerEvent): void {
-    if (dragging) onlive(compute(e));
+    if (!dragging) return;
+    lastWidth = compute(e);
+    onlive(lastWidth);
   }
 
   function up(e: PointerEvent): void {
     if (!dragging) return;
     dragging = false;
     oncommit(compute(e));
+  }
+
+  // A cancelled gesture has no meaningful final position: keep the last live width.
+  function cancel(): void {
+    if (!dragging) return;
+    dragging = false;
+    oncommit(lastWidth);
   }
 </script>
 
@@ -49,7 +60,7 @@
   onpointerdown={down}
   onpointermove={move}
   onpointerup={up}
-  onpointercancel={up}
+  onpointercancel={cancel}
 ></div>
 
 <style>
