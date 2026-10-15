@@ -18,11 +18,19 @@ const PARTITION = 'persist:ig-capture';
 // Requests worth keeping: DM REST endpoints, GraphQL, and anything mentioning "direct".
 const INTERESTING = [/\/api\/v1\/direct_v2\//, /\/api\/graphql/, /\/graphql\/query/, /direct/i, /\/api\/v1\/users\/.+\/info/, /upload/i];
 const isUpload = (url) => /upload/i.test(url);
+// Upload hosts (e.g. rupload.*) may not say "upload" in the path, so they are matched on the hostname.
+const isUploadHost = (url) => {
+  try {
+    return /upload/i.test(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+};
 // Matched against the URL path only, so e.g. a login page with ?next=/direct/ is not captured.
 const isInteresting = (url) => {
   try {
     const { pathname } = new URL(url);
-    return !pathname.startsWith('/accounts/') && INTERESTING.some((re) => re.test(pathname));
+    return isUploadHost(url) || (!pathname.startsWith('/accounts/') && INTERESTING.some((re) => re.test(pathname)));
   } catch {
     return false;
   }
@@ -53,7 +61,7 @@ function cleanBody(text) {
   // Strip common token fields from form bodies and JSON.
   return text
     .replace(/(fb_dtsg|lsd|jazoest|__hs|__rev|__s|__hsi|__dyn|__csr|__comet_req)=[^&]*/g, '$1=[redacted]')
-    .replace(/"(fb_dtsg|lsd|csrf_token|token)"\s*:\s*"[^"]*"/g, '"$1":"[redacted]"');
+    .replace(/"(fb_dtsg|lsd|csrf_token|token|async_get_token|claim|www_claim)"\s*:\s*"[^"]*"/g, '"$1":"[redacted]"');
 }
 
 function parseMaybeJson(text) {
@@ -85,7 +93,7 @@ async function attach(win) {
           method: request.method,
           headers: cleanHeaders(request.headers),
           // Upload bodies are file bytes: record only their size.
-          postData: isUpload(request.url) ? `[${(request.postData ?? '').length} chars omitted]` : cleanBody(request.postData)
+          postData: isUpload(request.url) || isUploadHost(request.url) ? `[${(request.postData ?? '').length} chars omitted]` : cleanBody(request.postData)
         });
       } else if (method === 'Network.responseReceived') {
         if (params.type === 'Script') scripts.add(params.requestId);
