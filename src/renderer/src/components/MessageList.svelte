@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import type { Thread, User } from '../../../shared/types';
   import { buildRows } from '../lib/grouping';
   import { formatDayLabel } from '../lib/time';
@@ -37,7 +38,8 @@
   // If the loaded history doesn't fill the view yet, keep loading older pages.
   $effect(() => {
     void rows.length;
-    maybeLoadOlder();
+    void scroller;
+    untrack(() => maybeLoadOlder());
   });
 
   function jumpToPresent(): void {

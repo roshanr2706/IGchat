@@ -1,8 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeText, makeThread, makeUser } from '../../../shared/test/factories';
 import type { Message } from '../../../shared/types';
-import { setBridge } from '../lib/api';
+import { IgError, setBridge } from '../lib/api';
 import { createFakeBridge, type FakeBridge } from '../lib/fakeBridge';
 import { inbox } from '../stores/inbox.svelte';
 import { messages } from '../stores/messages.svelte';
@@ -64,5 +64,21 @@ describe('MessageList', () => {
     render(MessageList, { props: { thread } });
     await fireEvent.click(screen.getByTitle('alex_r reacted with 😂'));
     expect(bridge.calls.find((c) => c.channel === 'msg:react')?.args).toEqual(['t1', 'r1', '😂']);
+  });
+
+  it('does not retry loading older messages in a loop after a failure', async () => {
+    let count = 0;
+    bridge = createFakeBridge({
+      'thread:loadOlder': () => {
+        count++;
+        throw new IgError('Network', 'down');
+      }
+    });
+    setBridge(bridge);
+    messages.byThread = { t1: { messages: [makeText({ threadId: 't1', senderId: 'ua', timestamp: now - 1000 })], hasOlder: true, loadingOlder: false, loaded: true, firstUnreadId: null } };
+    render(MessageList, { props: { thread } });
+    await vi.waitFor(() => expect(count).toBeGreaterThanOrEqual(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(count).toBe(1);
   });
 });

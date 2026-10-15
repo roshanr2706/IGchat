@@ -30,6 +30,7 @@
 {:else if message.kind === 'video'}
   {@const size = fit(message.width, message.height)}
   <div class="media">
+    <!-- svelte-ignore a11y_media_has_caption -->
     <video src={message.url} poster={message.thumbUrl} controls preload="none" width={size?.width} height={size?.height}></video>
   </div>
 {:else if message.kind === 'sharedPost' || message.kind === 'reel'}
