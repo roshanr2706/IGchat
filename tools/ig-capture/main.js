@@ -16,7 +16,8 @@ const OUT_DIR = path.join(__dirname, '..', '..', '.ig-capture', new Date().toISO
 const PARTITION = 'persist:ig-capture';
 
 // Requests worth keeping: DM REST endpoints, GraphQL, and anything mentioning "direct".
-const INTERESTING = [/\/api\/v1\/direct_v2\//, /\/api\/graphql/, /\/graphql\/query/, /direct/i, /\/api\/v1\/users\/.+\/info/];
+const INTERESTING = [/\/api\/v1\/direct_v2\//, /\/api\/graphql/, /\/graphql\/query/, /direct/i, /\/api\/v1\/users\/.+\/info/, /upload/i];
+const isUpload = (url) => /upload/i.test(url);
 // Matched against the URL path only, so e.g. a login page with ?next=/direct/ is not captured.
 const isInteresting = (url) => {
   try {
@@ -29,6 +30,9 @@ const isInteresting = (url) => {
 // Never written to disk.
 const REDACT_HEADERS = /^(cookie|set-cookie|authorization|x-csrftoken|x-ig-www-claim|x-instagram-ajax|x-fb-lsd|x-asbd-id)$/i;
 const MAX_FRAME_CHARS = 20000;
+// GraphQL operation name -> doc_id, scraped from Instagram's JS bundles (these ids change on deploys).
+const docIds = {};
+const RELAY_OP = /"(\w+)_instagramRelayOperation"[^]{0,200}?exports="(\d+)"/g;
 
 let seq = 0;
 
@@ -69,6 +73,7 @@ async function attach(win) {
 
   const pending = new Map(); // requestId -> { request }
   const sockets = new Map(); // requestId -> url
+  const scripts = new Set(); // requestIds of JS bundles to scan for doc_ids
 
   dbg.on('message', async (_event, method, params) => {
     try {
@@ -79,9 +84,11 @@ async function attach(win) {
           url: request.url,
           method: request.method,
           headers: cleanHeaders(request.headers),
-          postData: cleanBody(request.postData)
+          // Upload bodies are file bytes: record only their size.
+          postData: isUpload(request.url) ? `[${(request.postData ?? '').length} chars omitted]` : cleanBody(request.postData)
         });
       } else if (method === 'Network.responseReceived') {
+        if (params.type === 'Script') scripts.add(params.requestId);
         const entry = pending.get(params.requestId);
         if (entry) {
           entry.status = params.response.status;
@@ -89,12 +96,32 @@ async function attach(win) {
           entry.mimeType = params.response.mimeType;
         }
       } else if (method === 'Network.loadingFinished') {
+        if (scripts.delete(params.requestId)) {
+          const { body } = await dbg.sendCommand('Network.getResponseBody', { requestId: params.requestId }).catch(() => ({ body: '' }));
+          let found = 0;
+          for (const m of body.matchAll(RELAY_OP)) {
+            if (docIds[m[1]] !== m[2]) found++;
+            docIds[m[1]] = m[2];
+          }
+          if (found) {
+            fs.mkdirSync(OUT_DIR, { recursive: true });
+            fs.writeFileSync(path.join(OUT_DIR, 'doc-ids.json'), JSON.stringify(docIds, null, 2));
+          }
+          return;
+        }
         const entry = pending.get(params.requestId);
         if (!entry) return;
         pending.delete(params.requestId);
         try {
           const { body, base64Encoded } = await dbg.sendCommand('Network.getResponseBody', { requestId: params.requestId });
-          entry.response = base64Encoded ? '[binary]' : parseMaybeJson(cleanBody(body));
+          if (base64Encoded) entry.response = '[binary]';
+          else if (entry.mimeType === 'text/html') {
+            // Keep the whole page (tokens redacted) so the embedded bootstrap data can be studied.
+            fs.mkdirSync(OUT_DIR, { recursive: true });
+            const htmlFile = `${String(seq + 1).padStart(5, '0')}-page.html`;
+            fs.writeFileSync(path.join(OUT_DIR, htmlFile), cleanBody(body));
+            entry.response = `[html saved to ${htmlFile}]`;
+          } else entry.response = parseMaybeJson(cleanBody(body));
         } catch {
           entry.response = '[unavailable]';
         }
@@ -142,6 +169,6 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  console.log(`\nDone. ${seq} entries written to ${OUT_DIR}`);
+  console.log(`\nDone. ${seq} entries and ${Object.keys(docIds).length} GraphQL doc_ids written to ${OUT_DIR}`);
   app.quit();
 });
