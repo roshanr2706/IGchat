@@ -3,6 +3,7 @@
   import { windowColorsFor } from '../../shared/theme';
   import TitleBar from './components/TitleBar.svelte';
   import Sidebar from './components/Sidebar.svelte';
+  import ChatPane from './components/ChatPane.svelte';
   import { stepThread } from './lib/actions';
   import { matchShortcut } from './lib/shortcuts';
   import { inbox } from './stores/inbox.svelte';
@@ -76,7 +77,9 @@
     <Sidebar />
     <main class="main">
       {#if inbox.active}
-        <div class="empty"><p>{inbox.active.title}</p></div>
+        {#key inbox.active.id}
+          <ChatPane thread={inbox.active} />
+        {/key}
       {:else}
         <div class="empty">
           <p>Pick a conversation, or press <kbd>Ctrl</kbd> + <kbd>K</kbd> to jump to one.</p>
