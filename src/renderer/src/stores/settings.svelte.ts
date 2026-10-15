@@ -8,13 +8,18 @@ class SettingsStore {
     this.value = sanitizeSettings(initial);
   }
 
+  private seq = 0;
+
   /** Applies the patch immediately, then persists it in main (which returns the canonical value). */
   async update(patch: Partial<Settings>): Promise<void> {
+    const mine = ++this.seq;
     this.value = sanitizeSettings({ ...this.value, ...patch });
     try {
-      this.value = await call('settings:set', patch);
+      const canonical = await call('settings:set', patch);
+      // Main applies patches serially, so only the latest response is complete; apply it only then.
+      if (mine === this.seq) this.value = canonical;
     } catch {
-      // Keep the optimistic value; it will be persisted with the next successful update.
+      // Keep the optimistic value for this session; main did not persist this patch.
     }
   }
 }
