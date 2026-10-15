@@ -4,6 +4,7 @@
   import TitleBar from './components/TitleBar.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import ChatPane from './components/ChatPane.svelte';
+  import DetailsPanel from './components/DetailsPanel.svelte';
   import ConfirmUnsend from './components/ConfirmUnsend.svelte';
   import ContextMenu from './components/ContextMenu.svelte';
   import Lightbox from './components/Lightbox.svelte';
@@ -90,7 +91,9 @@
         </div>
       {/if}
     </main>
-    <!-- details -->
+    {#if inbox.active && ui.detailsVisible}
+      <DetailsPanel thread={inbox.active} />
+    {/if}
   </div>
   <!-- overlays -->
   <ContextMenu />
