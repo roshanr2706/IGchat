@@ -4,6 +4,7 @@
   import TitleBar from './components/TitleBar.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import ChatPane from './components/ChatPane.svelte';
+  import SettingsModal from './components/SettingsModal.svelte';
   import QuickSwitcher from './components/QuickSwitcher.svelte';
   import DetailsPanel from './components/DetailsPanel.svelte';
   import ConfirmUnsend from './components/ConfirmUnsend.svelte';
@@ -97,6 +98,9 @@
     {/if}
   </div>
   <!-- overlays -->
+  {#if ui.settingsOpen}
+    <SettingsModal />
+  {/if}
   {#if ui.switcherOpen}
     <QuickSwitcher />
   {/if}
