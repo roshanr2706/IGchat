@@ -3,16 +3,25 @@
   import { scrollToMessage } from '../lib/dom';
   import { formatHeaderTimestamp, formatTime } from '../lib/time';
   import { messages } from '../stores/messages.svelte';
+  import { ui } from '../stores/ui.svelte';
   import Avatar from './Avatar.svelte';
+  import EditBox from './EditBox.svelte';
+  import MessageActions from './MessageActions.svelte';
   import MessageContent from './MessageContent.svelte';
   import Reactions from './Reactions.svelte';
 
   type Props = { message: Message; showHeader: boolean; thread: Thread; users: Map<string, User>; myId: string };
   let { message, showHeader, thread, users, myId }: Props = $props();
 
+  // The toolbar only mounts while hovered (or while its emoji picker is open) to keep long lists cheap.
+  let hovered = $state(false);
+  let pinned = $state(false);
+
   const sender = $derived(users.get(message.senderId));
   const senderName = $derived(sender?.fullName || sender?.username || 'Unknown');
   const isoTime = $derived(new Date(message.timestamp).toISOString());
+  const editing = $derived(ui.editingId === message.id && message.kind === 'text');
+  const interactive = $derived(message.status === 'sent');
 
   function nameOf(id: string): string {
     const u = users.get(id);
@@ -22,6 +31,23 @@
   function toggleReaction(emoji: string, mine: boolean): void {
     if (mine) void messages.unreact(thread.id, message.id);
     else void messages.react(thread.id, message.id, emoji);
+  }
+
+  function saveEdit(text: string): void {
+    ui.editingId = null;
+    if (message.kind !== 'text') return;
+    const trimmed = text.trim();
+    if (!trimmed) {
+      ui.confirmUnsend = { threadId: thread.id, messageId: message.id };
+      return;
+    }
+    if (trimmed !== message.text) void messages.edit(thread.id, message.id, trimmed);
+  }
+
+  function onContextMenu(e: MouseEvent): void {
+    if (!interactive) return;
+    e.preventDefault();
+    ui.contextMenu = { threadId: thread.id, messageId: message.id, x: e.clientX, y: e.clientY };
   }
 </script>
 
@@ -33,7 +59,12 @@
     class:with-header={showHeader}
     class:pending={message.status === 'pending'}
     class:failed={message.status === 'failed'}
+    class:editing
+    class:replying={ui.replyTo?.id === message.id}
     data-message-id={message.id}
+    onmouseenter={() => (hovered = true)}
+    onmouseleave={() => (hovered = false)}
+    oncontextmenu={onContextMenu}
   >
     {#if message.replyTo}
       <button class="reply-ref" onclick={() => scrollToMessage(message.replyTo!.messageId)}>
@@ -51,9 +82,13 @@
       <time class="hover-time" datetime={isoTime}>{formatTime(message.timestamp)}</time>
     {/if}
     <div class="body">
-      <MessageContent {message} threadId={thread.id} />
-      {#if message.editedAt}
-        <span class="edited" title="Edited {formatHeaderTimestamp(message.editedAt, Date.now())}">(edited)</span>
+      {#if editing && message.kind === 'text'}
+        <EditBox initial={message.text} onsave={saveEdit} oncancel={() => (ui.editingId = null)} />
+      {:else}
+        <MessageContent {message} threadId={thread.id} />
+        {#if message.editedAt}
+          <span class="edited" title="Edited {formatHeaderTimestamp(message.editedAt, Date.now())}">(edited)</span>
+        {/if}
       {/if}
     </div>
     {#if message.reactions.length}
@@ -65,6 +100,11 @@
         <button onclick={() => void messages.retry(thread.id, message.id)}>Retry</button>
         ·
         <button onclick={() => messages.discard(thread.id, message.id)}>Delete</button>
+      </div>
+    {/if}
+    {#if interactive && !editing && (hovered || pinned)}
+      <div class="actions-anchor">
+        <MessageActions {message} threadId={thread.id} {myId} variant="toolbar" onpin={(open) => (pinned = open)} />
       </div>
     {/if}
   </article>
@@ -82,8 +122,13 @@
     margin-top: 1rem;
     contain-intrinsic-size: auto 48px;
   }
-  .message:hover {
+  .message:hover,
+  .message.editing {
     background: color-mix(in srgb, var(--bg-hover) 45%, transparent);
+  }
+  .message.replying {
+    background: var(--mention-bg);
+    box-shadow: inset 2px 0 0 var(--accent);
   }
   .message.pending {
     opacity: 0.55;
@@ -190,6 +235,12 @@
   }
   .failed-actions button {
     color: var(--text-link);
+  }
+  .actions-anchor {
+    position: absolute;
+    top: -16px;
+    right: 16px;
+    z-index: 2;
   }
   :global(.app.compact) .message {
     padding-left: 16px;

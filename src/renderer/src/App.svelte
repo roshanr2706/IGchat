@@ -4,6 +4,10 @@
   import TitleBar from './components/TitleBar.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import ChatPane from './components/ChatPane.svelte';
+  import ConfirmUnsend from './components/ConfirmUnsend.svelte';
+  import ContextMenu from './components/ContextMenu.svelte';
+  import Lightbox from './components/Lightbox.svelte';
+  import Toasts from './components/Toasts.svelte';
   import { stepThread } from './lib/actions';
   import { matchShortcut } from './lib/shortcuts';
   import { inbox } from './stores/inbox.svelte';
@@ -89,6 +93,10 @@
     <!-- details -->
   </div>
   <!-- overlays -->
+  <ContextMenu />
+  <ConfirmUnsend />
+  <Lightbox />
+  <Toasts />
 </div>
 
 <style>
