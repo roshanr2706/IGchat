@@ -2,6 +2,7 @@
   import type { Thread } from '../../../shared/types';
   import { ui } from '../stores/ui.svelte';
   import MessageList from './MessageList.svelte';
+  import Composer from './Composer.svelte';
 
   type Props = { thread: Thread };
   let { thread }: Props = $props();
@@ -24,6 +25,7 @@
     >
   </header>
   <MessageList {thread} />
+  <Composer {thread} />
 </section>
 
 <style>
