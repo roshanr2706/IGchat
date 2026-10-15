@@ -128,7 +128,6 @@ describe('messages store', () => {
     await messages.open(T);
     await messages.unsend(T, 'd');
     expect(ids()).toEqual(['c']);
-    await messages.open(T);
     setup({ 'msg:unsend': () => { throw new IgError('Network', 'down'); } });
     await messages.open(T);
     await messages.unsend(T, 'c');
@@ -165,5 +164,70 @@ describe('messages store', () => {
     await messages.open(T);
     await messages.loadOlder(T);
     expect(messages.mediaOf(T).map((m) => m.id)).toEqual(['c']);
+  });
+
+  it('does not discard a pending message while its send is in flight', async () => {
+    await messages.open(T);
+    const pending = messages.sendText(T, 'hey', null);
+    const temp = messages.get(T)!.messages.at(-1)!;
+    messages.discard(T, temp.id);
+    await pending;
+    expect(messages.get(T)!.messages.at(-1)!.id).toBe('real-hey');
+  });
+
+  it('revokes an image preview blob exactly once', async () => {
+    const calls: string[] = [];
+    const orig = URL.revokeObjectURL;
+    URL.revokeObjectURL = (u: string) => { calls.push(u); };
+    try {
+      await messages.open(T);
+      const pending = messages.sendImage(T, { bytes: new Uint8Array([1]), mime: 'image/png', previewUrl: 'blob:x' });
+      messages.discard(T, messages.get(T)!.messages.at(-1)!.id);
+      await pending;
+      expect(calls).toEqual(['blob:x']);
+    } finally {
+      URL.revokeObjectURL = orig;
+    }
+  });
+
+  it('does not send react/unreact/edit/unsend for failed messages', async () => {
+    setup({ 'msg:sendText': () => { throw new IgError('Network', 'down'); } });
+    await messages.open(T);
+    await messages.sendText(T, 'x', null);
+    const failed = messages.get(T)!.messages.at(-1)!;
+    await messages.react(T, failed.id, '🔥');
+    await messages.unreact(T, failed.id);
+    await messages.edit(T, failed.id, 'y');
+    await messages.unsend(T, failed.id);
+    const channels = bridge.calls.map((c) => c.channel);
+    expect(channels.some((c) => ['msg:react', 'msg:unreact', 'msg:edit', 'msg:unsend'].includes(c))).toBe(false);
+    expect(ids()).toEqual(['c', 'd']);
+  });
+
+  it('does not act on pending messages', async () => {
+    await messages.open(T);
+    const pending = messages.sendText(T, 'hey', null);
+    const temp = messages.get(T)!.messages.at(-1)!;
+    await messages.react(T, temp.id, '🔥');
+    await messages.edit(T, temp.id, 'z');
+    await messages.unsend(T, temp.id);
+    await pending;
+    const channels = bridge.calls.map((c) => c.channel);
+    expect(channels.some((c) => ['msg:react', 'msg:edit', 'msg:unsend'].includes(c))).toBe(false);
+    expect(messages.get(T)!.messages.at(-1)!.id).toBe('real-hey');
+  });
+
+  it('clears editingId when the edited message is unsent', async () => {
+    await messages.open(T);
+    ui.editingId = 'd';
+    await messages.unsend(T, 'd');
+    expect(ui.editingId).toBeNull();
+  });
+
+  it('does not mark own pushed messages as unread', async () => {
+    await messages.open(T);
+    inbox.activeId = 'other';
+    messages.onNew(T, [makeText({ id: 'm1', threadId: T, senderId: 'me', timestamp: 9 })]);
+    expect(messages.get(T)!.firstUnreadId).toBeNull();
   });
 });

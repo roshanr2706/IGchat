@@ -125,8 +125,7 @@ class MessagesStore {
   private async deliverImage(threadId: string, tempId: string, payload: ImagePayload): Promise<void> {
     try {
       this.confirm(threadId, tempId, await call('msg:sendImage', threadId, payload.bytes, payload.mime));
-      this.imagePayloads.delete(tempId);
-      revoke(payload.previewUrl);
+      if (this.imagePayloads.delete(tempId)) revoke(payload.previewUrl);
     } catch {
       this.fail(threadId, tempId);
     }
@@ -160,6 +159,7 @@ class MessagesStore {
   discard(threadId: string, tempId: string): void {
     const st = this.byThread[threadId];
     if (!st) return;
+    if (this.find(threadId, tempId)?.status !== 'failed') return;
     st.messages = st.messages.filter((m) => m.id !== tempId);
     const payload = this.imagePayloads.get(tempId);
     if (payload) {
@@ -170,7 +170,7 @@ class MessagesStore {
 
   async react(threadId: string, messageId: string, emoji: string): Promise<void> {
     const m = this.find(threadId, messageId);
-    if (!m) return;
+    if (!m || m.status !== 'sent') return;
     const before = $state.snapshot(m.reactions);
     m.reactions = withReaction(before, this.myId, emoji);
     try {
@@ -184,7 +184,7 @@ class MessagesStore {
 
   async unreact(threadId: string, messageId: string): Promise<void> {
     const m = this.find(threadId, messageId);
-    if (!m) return;
+    if (!m || m.status !== 'sent') return;
     const before = $state.snapshot(m.reactions);
     m.reactions = withoutReaction(before, this.myId);
     try {
@@ -198,7 +198,7 @@ class MessagesStore {
 
   async edit(threadId: string, messageId: string, text: string): Promise<void> {
     const m = this.find(threadId, messageId);
-    if (!m || m.kind !== 'text') return;
+    if (!m || m.kind !== 'text' || m.status !== 'sent') return;
     const before = $state.snapshot(m) as Message;
     m.text = text;
     m.editedAt = Date.now();
@@ -219,9 +219,16 @@ class MessagesStore {
     if (!st) return;
     const index = st.messages.findIndex((m) => m.id === messageId);
     if (index < 0) return;
+    const status = st.messages[index]!.status;
+    if (status === 'failed') {
+      this.discard(threadId, messageId);
+      return;
+    }
+    if (status !== 'sent') return;
     const removed = $state.snapshot(st.messages[index]!) as Message;
     st.messages.splice(index, 1);
     if (ui.replyTo?.id === messageId) ui.replyTo = null;
+    if (ui.editingId === messageId) ui.editingId = null;
     try {
       await call('msg:unsend', threadId, messageId);
     } catch {
@@ -237,7 +244,10 @@ class MessagesStore {
     const fresh = incoming.filter((m) => !have.has(m.id));
     if (!fresh.length) return;
     st.messages.push(...fresh);
-    if (threadId !== inbox.activeId && !st.firstUnreadId) st.firstUnreadId = fresh[0]!.id;
+    if (threadId !== inbox.activeId && !st.firstUnreadId) {
+      const firstOther = fresh.find((m) => m.senderId !== this.myId);
+      if (firstOther) st.firstUnreadId = firstOther.id;
+    }
   }
 
   onUpdated(threadId: string, message: Message): void {
