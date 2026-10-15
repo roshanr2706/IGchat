@@ -17,6 +17,15 @@ const PARTITION = 'persist:ig-capture';
 
 // Requests worth keeping: DM REST endpoints, GraphQL, and anything mentioning "direct".
 const INTERESTING = [/\/api\/v1\/direct_v2\//, /\/api\/graphql/, /\/graphql\/query/, /direct/i, /\/api\/v1\/users\/.+\/info/];
+// Matched against the URL path only, so e.g. a login page with ?next=/direct/ is not captured.
+const isInteresting = (url) => {
+  try {
+    const { pathname } = new URL(url);
+    return !pathname.startsWith('/accounts/') && INTERESTING.some((re) => re.test(pathname));
+  } catch {
+    return false;
+  }
+};
 // Never written to disk.
 const REDACT_HEADERS = /^(cookie|set-cookie|authorization|x-csrftoken|x-ig-www-claim|x-instagram-ajax|x-fb-lsd|x-asbd-id)$/i;
 const MAX_FRAME_CHARS = 20000;
@@ -65,7 +74,7 @@ async function attach(win) {
     try {
       if (method === 'Network.requestWillBeSent') {
         const { request, requestId } = params;
-        if (!INTERESTING.some((re) => re.test(request.url))) return;
+        if (!isInteresting(request.url)) return;
         pending.set(requestId, {
           url: request.url,
           method: request.method,
@@ -121,6 +130,12 @@ app.whenReady().then(async () => {
     title: 'IGchat capture — log in and use DMs, then close this window',
     webPreferences: { partition: PARTITION, contextIsolation: true, nodeIntegration: false, sandbox: true }
   });
+  win.webContents.on('did-fail-load', (_e, code, desc, url, isMain) => {
+    if (isMain) console.error(`[capture] page failed to load: ${code} ${desc} ${url}`);
+  });
+  // CDP's Network.enable never resolves on a webContents that has not navigated yet, so load a
+  // blank page first; otherwise the tool hangs here and the window stays blank.
+  await win.loadURL('about:blank');
   await attach(win);
   await win.loadURL('https://www.instagram.com/direct/inbox/');
   console.log(`\nCapturing to ${OUT_DIR}\nLog in, then: open a few DMs and a group, scroll up in one, send a message,\nreact to one, reply to one, edit one, unsend one, send an image. Close the window when done.\n`);
