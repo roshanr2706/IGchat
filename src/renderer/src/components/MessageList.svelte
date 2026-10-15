@@ -86,6 +86,9 @@
     flex-direction: column-reverse;
     overflow-y: auto;
   }
+  .scroller > :global(*) {
+    flex-shrink: 0;
+  }
   .spacer {
     flex: none;
     height: 16px;
