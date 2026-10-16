@@ -11,6 +11,7 @@ export const ENGINE_START_URL = 'https://www.instagram.com/direct/inbox/';
 
 const THREAD_NAV_TIMEOUT_MS = 8000;
 const RESPONSIVE_GRACE_MS = 10_000;
+const READY_SETTLE_MS = 3000;
 
 export function cdpFromDebugger(dbg: Debugger): CdpLike {
   return {
@@ -47,6 +48,9 @@ export class EngineWindow implements EngineLike {
   private unresponsive: ReturnType<typeof setTimeout> | null = null;
   private starting: Promise<void> | null = null;
   private redirecting = false;
+  /** Hard ceiling on automatic inbox reloads that no navigation can reset: only an explicit start() or logout() does. */
+  private readonly bounceCap = new RedirectPolicy(6, 10 * 60_000);
+  private readyTimer: ReturnType<typeof setTimeout> | null = null;
   /** Set once the user has been (or must be) given the window; no automatic redirects until a ready page clears it. */
   private handedOver = false;
   /** Set when redirect recovery gave up; even the post-login bounce stays off until a ready page. */
@@ -71,6 +75,13 @@ export class EngineWindow implements EngineLike {
   start(): Promise<void> {
     if (this.starting) return this.starting;
     if (this.win) return Promise.resolve();
+    // An explicit start gets a fresh cap; recovery rebuilds go through launch() and keep it.
+    this.bounceCap.reset();
+    return this.launch();
+  }
+
+  private launch(): Promise<void> {
+    if (this.starting) return this.starting;
     const p = this.doStart().finally(() => {
       if (this.starting === p) this.starting = null;
     });
@@ -195,6 +206,7 @@ export class EngineWindow implements EngineLike {
   }
 
   async logout(): Promise<void> {
+    this.bounceCap.reset();
     const ses = session.fromPartition(ENGINE_PARTITION);
     await ses.clearStorageData();
     await ses.clearCache();
@@ -210,6 +222,7 @@ export class EngineWindow implements EngineLike {
     if (this.recovering) clearTimeout(this.recovering);
     this.recovering = null;
     this.clearUnresponsive();
+    this.cancelReadyTimer();
     this.destroyWindow();
   }
 
@@ -221,11 +234,16 @@ export class EngineWindow implements EngineLike {
       this.curUrl = url;
     }
     const { kind, reason } = classifyEngineUrl(url);
+    if (kind !== 'ready') this.cancelReadyTimer();
     if (kind === 'ready') {
       this.failures = 0;
-      this.redirects.reset();
       this.handedOver = false;
       this.gaveUp = false;
+      // A transient ready page must not wipe the per-episode redirect budget: reset it once ready has held for a moment.
+      this.readyTimer ??= setTimeout(() => {
+        this.readyTimer = null;
+        if (this.state === 'ready') this.redirects.reset();
+      }, READY_SETTLE_MS);
       if (this.win.isVisible()) this.win.hide();
       this.setState('ready');
     } else if (kind === 'needsUser') {
@@ -237,13 +255,12 @@ export class EngineWindow implements EngineLike {
       this.setState('needsUser');
       this.showForUser();
     } else if (this.handedOver) {
-      // The user is mid-flow (password reset, "log in with Facebook"): leave navigation alone.
-      // The one exception is the page Instagram lands on right after a successful login.
+      // The user is mid-flow (password reset, "log in with Facebook"): leave navigation alone, except for the landing page.
       if (kind === 'goInbox' && this.isPostLoginLanding(url)) {
         void this.isLoggedIn()
           .then((ok) => {
             if (!ok || !this.handedOver) return;
-            // The user finished an auth step: start a fresh redirect budget instead of inheriting the exhausted one. A plain '/' landing keeps its budget so it can't loop.
+            // Finishing an auth step earns a fresh per-episode budget; the hard cap still applies.
             if (this.cameFromAuth()) {
               this.gaveUp = false;
               this.redirects.reset();
@@ -258,9 +275,11 @@ export class EngineWindow implements EngineLike {
   }
 
   /**
-   * The page Instagram lands on after the user finishes an auth step: any ordinary page reached straight from a
-   * needsUser page (login, checkpoint, consent) or from Facebook/Meta ("Log in with Facebook"), or the site root
-   * (any query) unless redirect recovery already gave up. Account pages are never a landing.
+   * While the user has the window (handedOver), the only page IGchat sends back to the inbox is the landing after a
+   * finished auth step, and only when the sessionid cookie exists. A landing is an ordinary Instagram page outside
+   * /accounts/ that is either the site root (any query), unless redirect recovery gave up, or was reached straight
+   * from an auth page: a needsUser page (login, checkpoint, consent) or Facebook/Meta login, checkpoint and OAuth.
+   * Anything else is left alone so flows like password reset work.
    */
   private isPostLoginLanding(url: string): boolean {
     try {
@@ -277,8 +296,14 @@ export class EngineWindow implements EngineLike {
     if (!this.prevUrl) return false;
     if (classifyEngineUrl(this.prevUrl).kind === 'needsUser') return true;
     try {
-      const host = new URL(this.prevUrl).hostname;
-      return ['facebook.com', 'meta.com'].some((d) => host === d || host.endsWith('.' + d));
+      const prev = new URL(this.prevUrl);
+      const host = prev.hostname;
+      const underDomain = (d: string): boolean => host === d || host.endsWith('.' + d);
+      if (host === 'auth.meta.com' || host.startsWith('accountscenter.')) return true;
+      if (underDomain('facebook.com') || underDomain('meta.com')) {
+        return ['/login', '/checkpoint', '/dialog/oauth'].some((p) => prev.pathname.startsWith(p));
+      }
+      return false;
     } catch {
       return false;
     }
@@ -288,13 +313,13 @@ export class EngineWindow implements EngineLike {
   private redirectToInbox(): void {
     const win = this.win;
     if (!win || this.redirecting) return;
+    if (this.bounceCap.record().action === 'giveUp') {
+      this.handOver();
+      return;
+    }
     const decision = this.redirects.record();
     if (decision.action === 'giveUp') {
-      this.handedOver = true;
-      this.gaveUp = true;
-      this.needsUserReason = 'challenge';
-      this.setState('needsUser');
-      this.showForUser();
+      this.handOver();
       return;
     }
     this.redirecting = true;
@@ -308,6 +333,19 @@ export class EngineWindow implements EngineLike {
       // Events that arrived during the reload were ignored; look at where we ended up.
       if (this.win === win) this.onUrl();
     })();
+  }
+
+  private handOver(): void {
+    this.handedOver = true;
+    this.gaveUp = true;
+    this.needsUserReason = 'challenge';
+    this.setState('needsUser');
+    this.showForUser();
+  }
+
+  private cancelReadyTimer(): void {
+    if (this.readyTimer) clearTimeout(this.readyTimer);
+    this.readyTimer = null;
   }
 
   private setState(s: EngineState): void {
@@ -324,7 +362,7 @@ export class EngineWindow implements EngineLike {
     this.recovering = setTimeout(() => {
       this.recovering = null;
       this.destroyWindow();
-      void this.start().catch(() => this.recover());
+      void this.launch().catch(() => this.recover());
     }, delay);
   }
 
@@ -339,6 +377,7 @@ export class EngineWindow implements EngineLike {
     this.cdpSession = null;
     this.redirecting = false;
     this.clearUnresponsive();
+    this.cancelReadyTimer();
     if (!win || win.isDestroyed()) return;
     try {
       win.webContents.debugger.detach();

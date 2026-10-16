@@ -32,6 +32,7 @@ const h = vi.hoisted(() => {
     loads: string[] = [];
     debugger = new FakeDebugger();
     nextUrl: (u: string) => string = (u) => u;
+    onLoaded: (u: string, wc: FakeWebContents) => void = () => {};
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     js: (script: string, wc: FakeWebContents) => any = () => undefined;
     getURL(): string {
@@ -42,6 +43,7 @@ const h = vi.hoisted(() => {
       this.url = this.nextUrl(u);
       this.emit('did-navigate', {}, this.url);
       this.emit('did-finish-load');
+      this.onLoaded(u, this);
     }
     executeJavaScript(script: string): Promise<unknown> {
       return Promise.resolve(this.js(script, this));
@@ -56,6 +58,7 @@ const h = vi.hoisted(() => {
       super();
       state.wins.push(this);
       if (state.nextUrl) this.webContents.nextUrl = state.nextUrl;
+      if (state.onLoaded) this.webContents.onLoaded = state.onLoaded;
     }
     show(): void {
       this.shown++;
@@ -73,7 +76,7 @@ const h = vi.hoisted(() => {
     }
     destroy(): void {}
   }
-  const state = { wins: [] as FakeWindow[], opened: [] as string[], cookies: [] as unknown[], nextUrl: null as null | ((u: string) => string) };
+  const state = { wins: [] as FakeWindow[], opened: [] as string[], cookies: [] as unknown[], nextUrl: null as null | ((u: string) => string), onLoaded: null as null | ((u: string, wc: FakeWebContents) => void) };
   return { FakeWindow, state };
 });
 
@@ -103,6 +106,7 @@ beforeEach(() => {
   h.state.cookies = [];
   h.state.opened.length = 0;
   h.state.nextUrl = null;
+  h.state.onLoaded = null;
 });
 
 async function readyEngine(): Promise<EngineWindow> {
@@ -370,5 +374,58 @@ describe('EngineWindow guards', () => {
       e.stop();
       vi.useRealTimers();
     }
+  });
+});
+
+describe('EngineWindow hard cap on automatic reloads', () => {
+  const CHALLENGE = 'https://www.instagram.com/challenge/x/';
+  const settle = async (e: EngineWindow): Promise<number> => {
+    await vi.waitFor(() => expect(e.state).toBe('needsUser'));
+    for (let i = 0; i < 5; i++) await flush();
+    const count = (): number => win().webContents.loads.filter((u) => u === INBOX).length;
+    const before = count();
+    for (let i = 0; i < 5; i++) await flush();
+    expect(count()).toBe(before);
+    return before;
+  };
+  const landOnRoot = (wc: { url: string; emit(e: string, ...a: unknown[]): void }): void => {
+    wc.url = 'https://www.instagram.com/';
+    wc.emit('did-navigate', {}, wc.url);
+  };
+
+  it('stops an inbox -> challenge -> / loop', async () => {
+    h.state.cookies = [{}];
+    h.state.nextUrl = (u) => (u === INBOX ? CHALLENGE : u);
+    h.state.onLoaded = (u, wc) => {
+      if (u === INBOX) landOnRoot(wc);
+    };
+    const e = new EngineWindow({ sleep: instant });
+    await e.start();
+    expect(await settle(e)).toBeLessThanOrEqual(7);
+    expect(win().shown).toBeGreaterThan(0);
+    e.stop();
+  });
+
+  it('stops an inbox -> facebook -> / loop', async () => {
+    h.state.cookies = [{}];
+    h.state.nextUrl = (u) => (u === INBOX ? 'https://www.facebook.com/login' : u);
+    h.state.onLoaded = (u, wc) => {
+      if (u === INBOX) landOnRoot(wc);
+    };
+    const e = new EngineWindow({ sleep: instant });
+    await e.start();
+    expect(await settle(e)).toBeLessThanOrEqual(7);
+    e.stop();
+  });
+
+  it('stops a briefly ready inbox that immediately goes to /', async () => {
+    h.state.cookies = [{}];
+    h.state.onLoaded = (u, wc) => {
+      if (u === INBOX) landOnRoot(wc);
+    };
+    const e = new EngineWindow({ sleep: instant });
+    await e.start();
+    expect(await settle(e)).toBeLessThanOrEqual(7);
+    e.stop();
   });
 });
