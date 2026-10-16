@@ -31,7 +31,7 @@ describe('Composer', () => {
     const user = userEvent.setup();
     render(Composer, { props: { thread } });
     await user.type(box(), 'hello{Enter}');
-    await vi.waitFor(() => expect(bridge.calls.find((c) => c.channel === 'msg:sendText')?.args).toEqual(['t1', 'hello', null]));
+    await vi.waitFor(() => expect(bridge.calls.find((c) => c.channel === 'msg:sendText')?.args).toEqual(['t1', 'hello', null, expect.stringMatching(/^temp-/)]));
     expect(box().value).toBe('');
   });
 
@@ -65,7 +65,7 @@ describe('Composer', () => {
     expect(screen.getByText('Alex')).toBeTruthy();
     expect(screen.getByText('are you coming?')).toBeTruthy();
     await user.type(box(), 'yes{Enter}');
-    await vi.waitFor(() => expect(bridge.calls.find((c) => c.channel === 'msg:sendText')?.args).toEqual(['t1', 'yes', 'orig']));
+    await vi.waitFor(() => expect(bridge.calls.find((c) => c.channel === 'msg:sendText')?.args).toEqual(['t1', 'yes', 'orig', expect.stringMatching(/^temp-/)]));
     expect(ui.replyTo).toBeNull();
   });
 

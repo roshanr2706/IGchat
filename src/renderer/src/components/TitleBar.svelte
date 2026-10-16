@@ -1,8 +1,10 @@
 <script lang="ts">
+  import { call } from '../lib/api';
   import { inbox } from '../stores/inbox.svelte';
   import { ui } from '../stores/ui.svelte';
 
-  const STATUS_TEXT = { ok: '', reconnecting: 'Reconnecting…', authExpired: 'Session expired', checkpoint: 'Action needed' } as const;
+  const STATUS_TEXT = { starting: 'Connecting…', ok: '', reconnecting: 'Reconnecting…', authExpired: 'Log in to Instagram', checkpoint: 'Instagram needs you' } as const;
+  const needsUser = $derived(inbox.syncStatus === 'authExpired' || inbox.syncStatus === 'checkpoint');
   const status = $derived(STATUS_TEXT[inbox.syncStatus]);
 </script>
 
@@ -12,8 +14,10 @@
     <span>Find a conversation</span>
     <kbd>Ctrl K</kbd>
   </button>
-  {#if status}
-    <span class="pill" class:bad={inbox.syncStatus !== 'reconnecting'}>{status}</span>
+  {#if needsUser}
+    <button class="pill bad" title="Opens Instagram's own page" onclick={() => void call('auth:login').catch(() => {})}>{status} →</button>
+  {:else if status}
+    <span class="pill">{status}</span>
   {/if}
 </header>
 

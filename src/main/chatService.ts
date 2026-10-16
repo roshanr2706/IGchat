@@ -1,7 +1,17 @@
 import type { ErrorCode, EventChannel, EventMap, ThreadPage } from '../shared/ipc';
-import type { Message, Page, Thread, User } from '../shared/types';
+import type { AuthStatus, Message, Page, Thread, User } from '../shared/types';
 
-/** Everything the app needs from a chat backend. MockChatService (Plan 1) and the Instagram service (Plan 2) implement it. */
+/**
+ * Everything the app needs from a chat backend. MockChatService and IgChatService implement it.
+ *
+ * Event semantics:
+ * - `inbox:updated` carries full snapshots of only the threads that changed.
+ * - `msg:new` carries messages the renderer has not been given by a direct call, including echoes of the
+ *   user's own sends; an echo of a send made through this service carries the send's `clientTempId`.
+ * - `msg:updated` carries a full replacement for a message (edits, reactions).
+ * - `msg:removed` covers unsends by anyone.
+ * - `sync:status` reports connection/engine state.
+ */
 export interface ChatService {
   me(): Promise<User>;
   getInbox(): Promise<Page<Thread>>;
@@ -10,12 +20,20 @@ export interface ChatService {
   loadOlder(threadId: string): Promise<ThreadPage>;
   getThreadDetails(threadId: string): Promise<Thread>;
   markSeen(threadId: string): Promise<void>;
-  sendText(threadId: string, text: string, replyToId: string | null): Promise<Message>;
-  sendImage(threadId: string, bytes: Uint8Array, mime: string): Promise<Message>;
+  sendText(threadId: string, text: string, replyToId: string | null, clientTempId?: string): Promise<Message>;
+  sendImage(threadId: string, bytes: Uint8Array, mime: string, clientTempId?: string): Promise<Message>;
   react(threadId: string, messageId: string, emoji: string): Promise<Message>;
   unreact(threadId: string, messageId: string): Promise<Message>;
   editMessage(threadId: string, messageId: string, text: string): Promise<Message>;
   unsendMessage(threadId: string, messageId: string): Promise<void>;
+  /** The conversation the user is looking at (null when none). Drives engine navigation. */
+  setActiveThread(threadId: string | null): void;
+  /** Whether the app window has focus. Drives fallback poll pacing. */
+  setFocused(focused: boolean): void;
+  authStatus(): Promise<AuthStatus>;
+  /** Shows Instagram's own login/challenge page to the user. Never handles credentials. */
+  login(): Promise<void>;
+  logout(): Promise<void>;
   on<E extends EventChannel>(event: E, listener: EventMap[E]): () => void;
   start(): void;
   stop(): void;

@@ -55,7 +55,9 @@ export type Message = MessageBase & MessageBody;
 export type MessageKind = MessageBody['kind'];
 export type MediaMessage = Extract<Message, { kind: 'image' | 'video' }>;
 
-export type SyncStatus = 'ok' | 'reconnecting' | 'authExpired' | 'checkpoint';
+export type SyncStatus = 'starting' | 'ok' | 'reconnecting' | 'authExpired' | 'checkpoint';
+export type EngineState = 'starting' | 'needsUser' | 'ready' | 'broken';
+export type AuthStatus = { loggedIn: boolean; engine: EngineState };
 export type Page<T> = { items: T[]; hasMore: boolean };
 
 /** Instagram allows editing a sent message for 15 minutes. */

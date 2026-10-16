@@ -1,11 +1,12 @@
 import type { Settings } from './settings';
 import type { ThemeDef } from './theme';
-import type { Message, Page, SyncStatus, Thread, User } from './types';
+import type { AuthStatus, Message, Page, SyncStatus, Thread, User } from './types';
 
-export type ErrorCode = 'AuthExpired' | 'Checkpoint' | 'RateLimited' | 'Network' | 'EditWindowExpired' | 'NotFound' | 'Unknown';
+export type ErrorCode = 'AuthExpired' | 'Checkpoint' | 'RateLimited' | 'Network' | 'EditWindowExpired' | 'NotFound' | 'EngineNotReady' | 'Unknown';
 export type Result<T> = { ok: true; value: T } | { ok: false; code: ErrorCode; message: string };
 
-export type ThreadPage = { messages: Message[]; hasOlder: boolean };
+/** `lastSeenMessageId`: the newest message the viewer had seen when the page was fetched (drives the "NEW" divider on first open). */
+export type ThreadPage = { messages: Message[]; hasOlder: boolean; lastSeenMessageId?: string | null };
 export type CustomThemes = { themes: ThemeDef[]; errors: string[] };
 
 /** Renderer → main request/response channels. */
@@ -17,12 +18,17 @@ export interface InvokeMap {
   'thread:loadOlder': (threadId: string) => ThreadPage;
   'thread:details': (threadId: string) => Thread;
   'thread:markSeen': (threadId: string) => void;
-  'msg:sendText': (threadId: string, text: string, replyToId: string | null) => Message;
-  'msg:sendImage': (threadId: string, bytes: Uint8Array, mime: string) => Message;
+  'msg:sendText': (threadId: string, text: string, replyToId: string | null, clientTempId: string) => Message;
+  'msg:sendImage': (threadId: string, bytes: Uint8Array, mime: string, clientTempId: string) => Message;
   'msg:react': (threadId: string, messageId: string, emoji: string) => Message;
   'msg:unreact': (threadId: string, messageId: string) => Message;
   'msg:edit': (threadId: string, messageId: string, text: string) => Message;
   'msg:unsend': (threadId: string, messageId: string) => void;
+  'auth:status': () => AuthStatus;
+  'auth:login': () => void;
+  'auth:logout': () => void;
+  'session:setActiveThread': (threadId: string | null) => void;
+  'session:setFocused': (focused: boolean) => void;
   'settings:set': (patch: Partial<Settings>) => Settings;
   'themes:listCustom': () => CustomThemes;
   'themes:openFolder': () => void;
@@ -57,6 +63,11 @@ export const INVOKE_CHANNELS = [
   'msg:unreact',
   'msg:edit',
   'msg:unsend',
+  'auth:status',
+  'auth:login',
+  'auth:logout',
+  'session:setActiveThread',
+  'session:setFocused',
   'settings:set',
   'themes:listCustom',
   'themes:openFolder',

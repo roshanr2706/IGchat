@@ -72,7 +72,7 @@ describe('messages store', () => {
   it('includes a reply reference', async () => {
     await messages.open(T);
     await messages.sendText(T, 'yes', server[3]!);
-    expect(bridge.calls.find((c) => c.channel === 'msg:sendText')!.args).toEqual([T, 'yes', 'd']);
+    expect(bridge.calls.find((c) => c.channel === 'msg:sendText')!.args).toEqual([T, 'yes', 'd', expect.stringMatching(/^temp-/)]);
   });
 
   it('marks failed sends and retries them', async () => {
@@ -229,5 +229,39 @@ describe('messages store', () => {
     inbox.activeId = 'other';
     messages.onNew(T, [makeText({ id: 'm1', threadId: T, senderId: 'me', timestamp: 9 })]);
     expect(messages.get(T)!.firstUnreadId).toBeNull();
+  });
+
+  it('passes the temp id to main when sending', async () => {
+    await messages.open(T);
+    await messages.sendText(T, 'hey', null);
+    const args = bridge.calls.find((c) => c.channel === 'msg:sendText')!.args;
+    expect(args[3]).toMatch(/^temp-/);
+  });
+
+  it('replaces the temp message when its echo arrives first', async () => {
+    let resolveSend: (m: Message) => void = () => {};
+    setup({ 'msg:sendText': () => new Promise<Message>((r) => (resolveSend = r)) });
+    await messages.open(T);
+    const sending = messages.sendText(T, 'echo me', null);
+    const tempId = messages.get(T)!.messages.at(-1)!.id;
+    const echo = { ...makeText({ id: 'real-echo', threadId: T, senderId: 'me', text: 'echo me', timestamp: 99 }), clientTempId: tempId };
+    messages.onNew(T, [echo]);
+    expect(messages.get(T)!.messages.filter((m) => m.kind === 'text' && m.text === 'echo me')).toHaveLength(1);
+    expect(messages.get(T)!.messages.at(-1)!.id).toBe('real-echo');
+    resolveSend({ ...echo });
+    await sending;
+    expect(messages.get(T)!.messages.filter((m) => m.id === 'real-echo')).toHaveLength(1);
+  });
+
+  it('keeps messages in chronological order when older ones arrive as new', async () => {
+    await messages.open(T);
+    messages.onNew(T, [makeText({ id: 'old', threadId: T, senderId: 'u', timestamp: 0 })]);
+    expect(ids()[0]).toBe('old');
+  });
+
+  it('marks the first unread message from the lastSeenMessageId on open', async () => {
+    setup({ 'thread:open': () => ({ messages: server, hasOlder: false, lastSeenMessageId: 'b' }) });
+    await messages.open(T);
+    expect(messages.get(T)!.firstUnreadId).toBe('c');
   });
 });

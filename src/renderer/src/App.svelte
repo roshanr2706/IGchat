@@ -12,6 +12,7 @@
   import Lightbox from './components/Lightbox.svelte';
   import Toasts from './components/Toasts.svelte';
   import { stepThread } from './lib/actions';
+  import { call } from './lib/api';
   import { matchShortcut } from './lib/shortcuts';
   import { inbox } from './stores/inbox.svelte';
   import { messages } from './stores/messages.svelte';
@@ -34,12 +35,18 @@
     };
     onScheme();
     onResize();
+    const onFocus = (): void => void call('session:setFocused', true).catch(() => {});
+    const onBlur = (): void => void call('session:setFocused', false).catch(() => {});
     scheme.addEventListener('change', onScheme);
     window.addEventListener('resize', onResize);
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('blur', onBlur);
     return () => {
       offs.forEach((off) => off());
       scheme.removeEventListener('change', onScheme);
       window.removeEventListener('resize', onResize);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('blur', onBlur);
     };
   });
 

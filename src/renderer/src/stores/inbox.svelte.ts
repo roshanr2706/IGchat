@@ -69,7 +69,15 @@ class InboxStore {
   }
 
   subscribe(): () => void {
-    const offs = [on('inbox:updated', (threads) => this.applyUpdates(threads)), on('sync:status', (status) => (this.syncStatus = status))];
+    const offs = [
+      on('inbox:updated', (threads) => this.applyUpdates(threads)),
+      on('sync:status', (status) => {
+        const was = this.syncStatus;
+        this.syncStatus = status;
+        // The backend became usable (engine ready, or back after a login): fetch the real inbox.
+        if (status === 'ok' && was !== 'ok') void this.load().catch(() => {});
+      })
+    ];
     return () => offs.forEach((off) => off());
   }
 }

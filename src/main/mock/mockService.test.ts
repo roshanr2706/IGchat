@@ -165,4 +165,15 @@ describe('MockChatService', () => {
   it('throws NotFound for unknown threads', async () => {
     await expect(svc.openThread('nope')).rejects.toMatchObject({ code: 'NotFound' });
   });
+
+  it('echoes the client temp id on sends and reports a ready session', async () => {
+    const t = (await svc.getInbox()).items[0]!;
+    const sent = await svc.sendText(t.id, 'tagged', null, 'temp-9');
+    expect(sent.clientTempId).toBe('temp-9');
+    const img = await svc.sendImage(t.id, new Uint8Array([1]), 'image/png', 'temp-10');
+    expect(img.clientTempId).toBe('temp-10');
+    expect(await svc.authStatus()).toEqual({ loggedIn: true, engine: 'ready' });
+    expect(() => svc.setActiveThread(t.id)).not.toThrow();
+    expect(() => svc.setFocused(false)).not.toThrow();
+  });
 });

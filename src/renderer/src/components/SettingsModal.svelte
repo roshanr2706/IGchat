@@ -29,6 +29,12 @@
       detailsPref: 'auto'
     });
   }
+
+  async function logOut(): Promise<void> {
+    if (!window.confirm('Log out of Instagram in IGchat?')) return;
+    close();
+    await call('auth:logout').catch(() => ui.toast("Couldn't log out"));
+  }
 </script>
 
 {#snippet swatch(theme: ThemeDef)}
@@ -96,6 +102,11 @@
         <input type="checkbox" checked={settings.value.compact} onchange={(e) => void settings.update({ compact: e.currentTarget.checked })} />
         Compact mode
       </label>
+    </section>
+
+    <section>
+      <h3>Account</h3>
+      <button class="secondary" onclick={() => void logOut()}>Log out of Instagram</button>
     </section>
 
     <section>

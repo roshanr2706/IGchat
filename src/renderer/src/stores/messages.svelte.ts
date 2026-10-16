@@ -46,6 +46,11 @@ class MessagesStore {
       st.messages = [...page.messages, ...unsent];
       st.hasOlder = page.hasOlder;
       st.loaded = true;
+      if (page.lastSeenMessageId && !st.firstUnreadId) {
+        const seenAt = page.messages.findIndex((m) => m.id === page.lastSeenMessageId);
+        const next = seenAt >= 0 ? page.messages.slice(seenAt + 1).find((m) => m.senderId !== this.myId) : undefined;
+        if (next) st.firstUnreadId = next.id;
+      }
     } catch {
       ui.toast("Couldn't load messages");
     }
@@ -116,7 +121,7 @@ class MessagesStore {
 
   private async deliverText(threadId: string, tempId: string, text: string, replyToId: string | null): Promise<void> {
     try {
-      this.confirm(threadId, tempId, await call('msg:sendText', threadId, text, replyToId));
+      this.confirm(threadId, tempId, await call('msg:sendText', threadId, text, replyToId, tempId));
     } catch {
       this.fail(threadId, tempId);
     }
@@ -124,7 +129,7 @@ class MessagesStore {
 
   private async deliverImage(threadId: string, tempId: string, payload: ImagePayload): Promise<void> {
     try {
-      this.confirm(threadId, tempId, await call('msg:sendImage', threadId, payload.bytes, payload.mime));
+      this.confirm(threadId, tempId, await call('msg:sendImage', threadId, payload.bytes, payload.mime, tempId));
       if (this.imagePayloads.delete(tempId)) revoke(payload.previewUrl);
     } catch {
       this.fail(threadId, tempId);
@@ -240,10 +245,19 @@ class MessagesStore {
   onNew(threadId: string, incoming: Message[]): void {
     const st = this.byThread[threadId];
     if (!st?.loaded) return;
-    const have = new Set(st.messages.map((m) => m.id));
-    const fresh = incoming.filter((m) => !have.has(m.id));
+    const fresh: Message[] = [];
+    for (const m of incoming) {
+      // An echo of our own optimistic send: swap the temp bubble for the real message, keeping its key.
+      const tempIndex = m.clientTempId ? st.messages.findIndex((x) => x.id === m.clientTempId) : -1;
+      if (tempIndex >= 0) {
+        st.messages[tempIndex] = { ...m };
+        continue;
+      }
+      if (!st.messages.some((x) => x.id === m.id)) fresh.push(m);
+    }
     if (!fresh.length) return;
-    st.messages.push(...fresh);
+    // Older messages can arrive as "new" (e.g. the page loading history), so keep chronological order.
+    st.messages = [...st.messages, ...fresh].sort((a, b) => a.timestamp - b.timestamp);
     if (threadId !== inbox.activeId && !st.firstUnreadId) {
       const firstOther = fresh.find((m) => m.senderId !== this.myId);
       if (firstOther) st.firstUnreadId = firstOther.id;

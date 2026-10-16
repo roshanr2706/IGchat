@@ -82,4 +82,15 @@ describe('inbox store', () => {
     expect(inbox.syncStatus).toBe('reconnecting');
     off();
   });
+
+  it('reloads the inbox when sync becomes ok after starting', async () => {
+    await inbox.load();
+    const off = inbox.subscribe();
+    const before = bridge.calls.filter((c) => c.channel === 'inbox:get').length;
+    bridge.emit('sync:status', 'starting');
+    bridge.emit('sync:status', 'ok');
+    await Promise.resolve();
+    expect(bridge.calls.filter((c) => c.channel === 'inbox:get').length).toBe(before + 1);
+    off();
+  });
 });

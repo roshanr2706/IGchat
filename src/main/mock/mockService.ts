@@ -1,7 +1,7 @@
 import type { EventChannel, EventMap, ThreadPage } from '../../shared/ipc';
 import { messagePreview } from '../../shared/preview';
 import { withReaction, withoutReaction } from '../../shared/reactions';
-import { EDIT_WINDOW_MS, type Message, type MessageBase, type Page, type Thread, type User } from '../../shared/types';
+import { EDIT_WINDOW_MS, type AuthStatus, type Message, type MessageBase, type Page, type Thread, type User } from '../../shared/types';
 import { ServiceError, type ChatService } from '../chatService';
 import { Emitter } from '../emitter';
 import { createSeed, LINES, ME, mulberry32, threadPreview } from './seed';
@@ -110,7 +110,7 @@ export class MockChatService implements ChatService {
     this.events.emit('inbox:updated', clone([t]));
   }
 
-  async sendText(threadId: string, text: string, replyToId: string | null): Promise<Message> {
+  async sendText(threadId: string, text: string, replyToId: string | null, clientTempId?: string): Promise<Message> {
     await this.delay();
     if (text.toLowerCase().includes('[fail]')) throw new ServiceError('Network', 'Simulated send failure');
     const target = replyToId ? this.threadMessages(threadId).find((m) => m.id === replyToId) : undefined;
@@ -121,16 +121,16 @@ export class MockChatService implements ChatService {
       text
     };
     this.push(threadId, msg, false);
-    return clone(msg);
+    return clone(clientTempId ? { ...msg, clientTempId } : msg);
   }
 
-  async sendImage(threadId: string, bytes: Uint8Array, mime: string): Promise<Message> {
+  async sendImage(threadId: string, bytes: Uint8Array, mime: string, clientTempId?: string): Promise<Message> {
     await this.delay();
     if (!mime.startsWith('image/')) throw new ServiceError('Unknown', 'Only images can be sent');
     const url = `data:${mime};base64,${Buffer.from(bytes).toString('base64')}`;
     const msg: Message = { ...this.base(threadId, ME.id), kind: 'image', url, width: 0, height: 0 };
     this.push(threadId, msg, false);
-    return clone(msg);
+    return clone(clientTempId ? { ...msg, clientTempId } : msg);
   }
 
   async react(threadId: string, messageId: string, emoji: string): Promise<Message> {
@@ -172,6 +172,18 @@ export class MockChatService implements ChatService {
     list.splice(index, 1);
     this.refreshPreview(threadId);
   }
+
+  setActiveThread(_threadId: string | null): void {}
+
+  setFocused(_focused: boolean): void {}
+
+  async authStatus(): Promise<AuthStatus> {
+    return { loggedIn: true, engine: 'ready' };
+  }
+
+  async login(): Promise<void> {}
+
+  async logout(): Promise<void> {}
 
   /** Fake incoming traffic: a new message from someone, or an edit of their recent message. */
   simulateIncoming(kind: 'message' | 'edit' = this.rand() < 0.2 ? 'edit' : 'message'): void {

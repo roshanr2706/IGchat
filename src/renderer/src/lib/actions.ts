@@ -1,3 +1,4 @@
+import { call } from './api';
 import { inbox } from '../stores/inbox.svelte';
 import { messages } from '../stores/messages.svelte';
 import { ui } from '../stores/ui.svelte';
@@ -8,6 +9,7 @@ export function openThread(id: string): void {
   inbox.select(id);
   ui.replyTo = null;
   ui.editingId = null;
+  void call('session:setActiveThread', id).catch(() => {});
   void messages.open(id);
 }
 
