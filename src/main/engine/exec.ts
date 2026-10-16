@@ -85,9 +85,9 @@ export class Exec {
       json = null;
     }
     const code = classifyGraphQLFailure(res?.status ?? 0, res?.url ?? '', json);
-    // Status 0 means the request started but no HTTP answer came back (abort, dropped connection): ambiguous.
+    // Status 0 (no HTTP answer) and gateway errors 502/503/504 (a proxy gave up; the origin may still have processed it) are ambiguous.
     // Every classified HTTP answer (4xx/5xx, login or challenge redirect, GraphQL errors) is a definite failure.
-    if (code) throw new ServiceError(code, `${name} failed (${res?.status ?? 0})`, !res || res.status === 0);
+    if (code) throw new ServiceError(code, `${name} failed (${res?.status ?? 0})`, !res || res.status === 0 || res.status === 502 || res.status === 503 || res.status === 504);
     if (!json) throw new ServiceError('Unknown', `${name} returned an unreadable response`, true);
     return (json.data ?? null) as T;
   }

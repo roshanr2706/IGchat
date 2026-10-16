@@ -15,6 +15,8 @@ const revoke = (url: string): void => {
 class MessagesStore {
   byThread = $state<Record<string, ThreadState>>({});
   private tempSeq = 0;
+  // Unique per renderer session, so a temp id from an earlier session can never alias a new one.
+  private readonly session = Math.random().toString(36).slice(2, 8);
   private readonly imagePayloads = new Map<string, ImagePayload>();
 
   private get myId(): string {
@@ -79,7 +81,7 @@ class MessagesStore {
 
   private insertTemp(threadId: string, body: MessageBody, replyTo?: ReplyRef): string {
     const st = this.ensure(threadId);
-    const tempId = `temp-${++this.tempSeq}`;
+    const tempId = `temp-${this.session}-${++this.tempSeq}`;
     const msg = {
       id: tempId,
       clientTempId: tempId,

@@ -66,7 +66,8 @@ export class IgChatService implements ChatService {
   private imageBusy = 0;
   private started = false;
   private pagedPast = false;
-  private readonly otidByTemp = new Map<string, string>();
+  private readonly otidByTemp = new Map<string, { otid: string; threadId: string }>();
+  private readonly imageWatchers = new Map<string, Set<() => void>>();
   private readonly claimedImages = new Set<string>();
   private readonly deferred = new Set<() => void>();
 
@@ -154,7 +155,7 @@ export class IgChatService implements ChatService {
     for (const finish of [...this.deferred]) finish();
   }
 
-  private remember(map: Map<string, string>, key: string, value: string): void {
+  private remember<V>(map: Map<string, V>, key: string, value: V): void {
     map.set(key, value);
     if (map.size > MAX_TRACKED) map.delete(map.keys().next().value!);
   }
@@ -293,9 +294,11 @@ export class IgChatService implements ChatService {
   async sendText(threadId: string, text: string, replyToId: string | null, clientTempId?: string): Promise<Message> {
     await this.ready();
     // A retry of the same temp id reuses its otid so Instagram can dedupe a send that did go through.
-    const known = clientTempId ? this.otidByTemp.get(clientTempId) : undefined;
+    // Only within the same thread: a temp id seen for another thread never lends its otid.
+    const prior = clientTempId ? this.otidByTemp.get(clientTempId) : undefined;
+    const known = prior && prior.threadId === threadId ? prior.otid : undefined;
     const otid = known ?? generateOtid(this.now());
-    if (clientTempId && !known) this.remember(this.otidByTemp, clientTempId, otid);
+    if (clientTempId && !known) this.remember(this.otidByTemp, clientTempId, { otid, threadId });
     if (clientTempId) this.store.registerPending(otid, clientTempId);
     let res: ReturnType<typeof extractSendResult> = null;
     try {
@@ -353,19 +356,23 @@ export class IgChatService implements ChatService {
     if (!ext) return Promise.reject(new ServiceError('Unknown', 'Only PNG, JPEG, GIF and WebP images can be sent'));
     // One image at a time: each send must be able to tell which echo is its own.
     this.imageBusy++;
-    const run = this.imageQueue.then(async () => {
-      try {
-        return await this.sendImageNow(threadId, bytes, ext, clientTempId);
-      } finally {
+    // The caller gets its answer as soon as it is known, but the queue (and navigation) stay held until the
+    // attach call itself has settled, so a slow attach can never overlap the next image or a page navigation.
+    const hold = { settled: Promise.resolve() };
+    const run = this.imageQueue.then(() => this.sendImageNow(threadId, bytes, ext, hold, clientTempId));
+    this.imageQueue = run
+      .then(() => {}, () => {})
+      .then(() => hold.settled)
+      .then(() => {
         if (--this.imageBusy === 0 && this.activeThreadId) this.navigate(this.activeThreadId);
-      }
-    });
-    this.imageQueue = run.catch(() => {});
+      });
     return run;
   }
 
-  private async sendImageNow(threadId: string, bytes: Uint8Array, ext: string, clientTempId?: string): Promise<Message> {
+  private async sendImageNow(threadId: string, bytes: Uint8Array, ext: string, hold: { settled: Promise<void> }, clientTempId?: string): Promise<Message> {
     await this.ready();
+    // An earlier send in this thread that ended MaybeSent must not claim this image's echo.
+    for (const finish of [...(this.imageWatchers.get(threadId) ?? [])]) finish();
     const file = join(this.deps.tmpDir, `igchat-upload-${this.now()}-${Math.floor(Math.random() * 1e6)}.${ext}`);
     await writeFile(file, bytes);
     const startedAt = this.now();
@@ -382,7 +389,7 @@ export class IgChatService implements ChatService {
       // attachImage throws only before the file is handed to the page (safe to report, definite failure). Once it
       // resolves, or the deadline passes with the outcome unknown, only the echo decides, and a missing echo is MaybeSent.
       const attach = this.deps.engine.attachImage(threadId, file);
-      attach.catch(() => {});
+      hold.settled = attach.then(() => {}, () => {});
       let deadline: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([attach, new Promise<void>((resolve) => (deadline = setTimeout(resolve, this.timeout('attach'))))]);
@@ -394,7 +401,13 @@ export class IgChatService implements ChatService {
       if (sent) return claim(sent);
       // Keep watching: a late echo is tagged so the renderer swaps the "not confirmed" bubble for it.
       let off = (): void => {};
-      const finish = this.defer(this.timeout('maybeGrace'), () => off());
+      const watchers = this.imageWatchers.get(threadId) ?? new Set<() => void>();
+      this.imageWatchers.set(threadId, watchers);
+      const finish = this.defer(this.timeout('maybeGrace'), () => {
+        off();
+        watchers.delete(finish);
+      });
+      watchers.add(finish);
       off = this.store.events.on('msg:new', (tid, msgs) => {
         const late = tid === threadId ? msgs.find(isMine) : undefined;
         if (late) {

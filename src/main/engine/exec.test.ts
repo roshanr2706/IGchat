@@ -115,7 +115,11 @@ describe('Exec', () => {
     const fast = new Exec(page, tap, new DocIdRegistry(), { fetchTimeoutMs: 20, jitterMs: () => 0, sleep: async () => {} });
     page.handler = () => new Promise(() => {});
     expect(await fast.run('IGDirectTextSendMutation', {}).catch((e: ServiceError) => e)).toMatchObject({ code: 'Network', ambiguous: true });
-    for (const [status, url, text] of [[500, '', '{}'], [429, '', '{}'], [400, '', '{}'], [403, '', '{}'], [200, 'https://www.instagram.com/accounts/login/', '<html>'], [200, '', '{"errors":[{"message":"bad"}]}']] as const) {
+    for (const status of [502, 503, 504]) {
+      page.handler = () => ({ status, url: '', text: '{}' });
+      expect(await run()).toMatchObject({ code: 'Network', ambiguous: true });
+    }
+    for (const [status, url, text] of [[500, '', '{}'], [501, '', '{}'], [429, '', '{}'], [400, '', '{}'], [403, '', '{}'], [200, 'https://www.instagram.com/accounts/login/', '<html>'], [200, '', '{"errors":[{"message":"bad"}]}']] as const) {
       page.handler = () => ({ status, url, text });
       expect(((await run()) as ServiceError).ambiguous).toBe(false);
     }

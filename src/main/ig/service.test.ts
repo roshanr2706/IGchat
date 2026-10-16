@@ -401,6 +401,60 @@ describe('IgChatService writes', () => {
     s.stop();
   });
 
+  it('ends the late-echo watcher of an earlier MaybeSent image when the next image is sent in the same thread', async () => {
+    const s = mk({ timeouts: { imageEcho: 200, maybeGrace: 60_000 } });
+    await expect(s.sendImage(T1, new Uint8Array([1]), 'image/png', 'temp-A')).rejects.toMatchObject({ code: 'MaybeSent' });
+    engine.onAttach = () => void store.ingestMessages([imageRecord('B')]);
+    const updated = vi.fn();
+    s.on('msg:updated', updated);
+    const b = await s.sendImage(T1, new Uint8Array([2]), 'image/png', 'temp-B');
+    expect(b).toMatchObject({ id: 'mid.$B', clientTempId: 'temp-B' });
+    expect(updated).toHaveBeenCalledTimes(1);
+    expect(updated).toHaveBeenCalledWith(T1, expect.objectContaining({ id: 'mid.$B', clientTempId: 'temp-B' }));
+    expect(store.messagesOf(T1).filter((m) => m.clientTempId === 'temp-A')).toHaveLength(0);
+    s.stop();
+  });
+
+  it('holds the queue and navigation until the attach call itself settles', async () => {
+    let release!: () => void;
+    let attaches = 0;
+    engine.attachImage = () => {
+      attaches++;
+      return attaches === 1 ? new Promise<void>((resolve) => (release = resolve)) : Promise.resolve();
+    };
+    const s = mk({ timeouts: { attach: 20, imageEcho: 100, maybeGrace: 60_000 } });
+    const first = s.sendImage(T1, new Uint8Array([1]), 'image/png', 'temp-1');
+    s.setActiveThread('1000000000000002');
+    await expect(first).rejects.toMatchObject({ code: 'MaybeSent' });
+    const second = s.sendImage(T1, new Uint8Array([2]), 'image/png', 'temp-2');
+    await new Promise((r) => setTimeout(r, 30));
+    expect(attaches).toBe(1);
+    expect(engine.navigated).toEqual([]);
+    release();
+    await expect(second).rejects.toMatchObject({ code: 'MaybeSent' });
+    expect(attaches).toBe(2);
+    await vi.waitFor(() => expect(engine.navigated).toEqual(['1000000000000002']));
+    s.stop();
+  });
+
+  it('does not reuse an otid for a temp id that was used in another thread', async () => {
+    exec.handlers[OPS.sendText] = () => {
+      throw new ServiceError('RateLimited', 'slow down');
+    };
+    await expect(svc.sendText(T1, 'x', null, 'temp-z')).rejects.toBeInstanceOf(ServiceError);
+    await expect(svc.sendText('1000000000000002', 'x', null, 'temp-z')).rejects.toBeInstanceOf(ServiceError);
+    expect(otidOf(1)).not.toBe(otidOf(0));
+    await expect(svc.sendText('1000000000000002', 'x', null, 'temp-z')).rejects.toBeInstanceOf(ServiceError);
+    expect(otidOf(2)).toBe(otidOf(1));
+  });
+
+  it('drops the otid mapping after a successful send', async () => {
+    exec.handlers[OPS.sendText] = () => ({ xig_direct_text_send_with_slide_messaging_response: { message_id: 'mid.$ok', timestamp_ms: String(NOW) } });
+    await svc.sendText(T1, 'x', null, 'temp-ok');
+    await svc.sendText(T1, 'x', null, 'temp-ok');
+    expect(otidOf(1)).not.toBe(otidOf(0));
+  });
+
   it('emits msg:updated with the tag when the echo arrives during the call', async () => {
     const updated = vi.fn();
     svc.on('msg:updated', updated);
@@ -439,7 +493,7 @@ describe('IgChatService writes', () => {
     store.ingestMessages([imageRecord('nav')]);
     release();
     await send;
-    expect(engine.navigated).toEqual(['1000000000000002']);
+    await vi.waitFor(() => expect(engine.navigated).toEqual(['1000000000000002']));
   });
 
   it('serializes image sends so each waits for its own echo', async () => {
