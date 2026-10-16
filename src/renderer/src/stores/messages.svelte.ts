@@ -251,6 +251,8 @@ class MessagesStore {
       const tempIndex = m.clientTempId ? st.messages.findIndex((x) => x.id === m.clientTempId) : -1;
       if (tempIndex >= 0) {
         st.messages[tempIndex] = { ...m };
+        // An untagged copy of the same message may already be shown; keep only the swapped bubble.
+        st.messages = st.messages.filter((x, i) => i === tempIndex || x.id !== m.id);
         continue;
       }
       if (!st.messages.some((x) => x.id === m.id)) fresh.push(m);
@@ -265,6 +267,12 @@ class MessagesStore {
   }
 
   onUpdated(threadId: string, message: Message): void {
+    // Main may learn which temp bubble a known message echoes only later; treat that as the echo.
+    const st = this.byThread[threadId];
+    if (message.clientTempId && st?.messages.some((x) => x.id === message.clientTempId)) {
+      this.onNew(threadId, [message]);
+      return;
+    }
     this.replace(threadId, message);
   }
 

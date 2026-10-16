@@ -253,6 +253,23 @@ describe('messages store', () => {
     expect(messages.get(T)!.messages.filter((m) => m.id === 'real-echo')).toHaveLength(1);
   });
 
+  it('swaps the temp bubble when the echo tag arrives as an update to an already-shown copy', async () => {
+    let resolveSend: (m: Message) => void = () => {};
+    setup({ 'msg:sendText': () => new Promise<Message>((r) => (resolveSend = r)) });
+    await messages.open(T);
+    const sending = messages.sendText(T, 'late tag', null);
+    const tempId = messages.get(T)!.messages.at(-1)!.id;
+    const real = makeText({ id: 'real-late', threadId: T, senderId: 'me', text: 'late tag', timestamp: 99 });
+    messages.onNew(T, [real]);
+    messages.onUpdated(T, { ...real, clientTempId: tempId });
+    const shown = messages.get(T)!.messages.filter((m) => m.kind === 'text' && m.text === 'late tag');
+    expect(shown).toHaveLength(1);
+    expect(shown[0]!.id).toBe('real-late');
+    resolveSend({ ...real, clientTempId: tempId });
+    await sending;
+    expect(messages.get(T)!.messages.filter((m) => m.id === 'real-late')).toHaveLength(1);
+  });
+
   it('keeps messages in chronological order when older ones arrive as new', async () => {
     await messages.open(T);
     messages.onNew(T, [makeText({ id: 'old', threadId: T, senderId: 'u', timestamp: 0 })]);
