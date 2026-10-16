@@ -24,4 +24,15 @@ describe('media urls', () => {
     expect(fromMediaUrl('igmedia://x/' + encodeURIComponent('https://scontent.cdninstagram.com/x'))).toBeNull();
     expect(fromMediaUrl('not a url')).toBeNull();
   });
+
+  it('rejects userinfo and odd ports, and normalizes via href', () => {
+    expect(toMediaUrl('https://user:pw@scontent.cdninstagram.com/a.jpg')).toBe('');
+    expect(toMediaUrl('https://scontent.cdninstagram.com:8443/a.jpg')).toBe('');
+    expect(toMediaUrl('https://scontent.cdninstagram.com:443/a.jpg')).toBe('igmedia://m/' + encodeURIComponent('https://scontent.cdninstagram.com/a.jpg'));
+    expect(fromMediaUrl('igmedia://m/' + encodeURIComponent('https://u@scontent.cdninstagram.com/a.jpg'))).toBeNull();
+    expect(fromMediaUrl('igmedia://m/' + encodeURIComponent('https://scontent.cdninstagram.com:81/a.jpg'))).toBeNull();
+    expect(fromMediaUrl('igmedia://m/' + encodeURIComponent('http://scontent.cdninstagram.com/a.jpg'))).toBeNull();
+    expect(fromMediaUrl('igmedia://m/' + encodeURIComponent('https://SCONTENT.CdnInstagram.com/a.jpg'))).toBe('https://scontent.cdninstagram.com/a.jpg');
+    expect(fromMediaUrl('igmedia://m/' + encodeURIComponent(encodeURIComponent('https://scontent.cdninstagram.com/a.jpg')))).toBeNull();
+  });
 });

@@ -1,5 +1,9 @@
 export const MEDIA_SCHEME = 'igmedia';
 
+function allowedUrl(u: URL): boolean {
+  return u.protocol === 'https:' && !u.username && !u.password && (u.port === '' || u.port === '443') && isAllowedMediaHost(u.hostname);
+}
+
 export function isAllowedMediaHost(hostname: string): boolean {
   return /(^|\.)(cdninstagram\.com|fbcdn\.net)$/i.test(hostname);
 }
@@ -9,8 +13,8 @@ export function toMediaUrl(url: string | null | undefined): string {
   if (!url) return '';
   try {
     const u = new URL(url);
-    if (u.protocol !== 'https:' || !isAllowedMediaHost(u.hostname)) return '';
-    return `${MEDIA_SCHEME}://m/${encodeURIComponent(url)}`;
+    if (!allowedUrl(u)) return '';
+    return `${MEDIA_SCHEME}://m/${encodeURIComponent(u.href)}`;
   } catch {
     return '';
   }
@@ -23,7 +27,7 @@ export function fromMediaUrl(mediaUrl: string): string | null {
     if (u.protocol !== `${MEDIA_SCHEME}:` || u.hostname !== 'm') return null;
     const inner = decodeURIComponent(u.pathname.slice(1));
     const target = new URL(inner);
-    return target.protocol === 'https:' && isAllowedMediaHost(target.hostname) ? inner : null;
+    return allowedUrl(target) ? target.href : null;
   } catch {
     return null;
   }

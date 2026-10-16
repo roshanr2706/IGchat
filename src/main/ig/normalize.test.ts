@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import threadList from './__fixtures__/threadList.json';
 import messageList from './__fixtures__/messageList.json';
-import { normalizeMessage, normalizeThread, normalizeUser, type MessageContext } from './normalize';
+import { normalizeMessage, normalizeReactions, normalizeThread, normalizeUser, type MessageContext } from './normalize';
 
 const threadNodes = threadList.data.fetch__SlideMailbox.threads_by_folder.edges.map((e) => e.node.as_ig_direct_thread);
 const messageNodes = messageList.data.fetch__SlideThread.as_ig_direct_thread.slide_messages.edges.map((e) => e.node);
@@ -84,5 +84,41 @@ describe('normalizeMessage', () => {
     expect(normalizeMessage(undefined, ctx)).toBeNull();
     expect(normalizeMessage({ content_type: 'TEXT' }, ctx)).toBeNull();
     expect(normalizeMessage({ message_id: 'x', content_type: 'TEXT', content: {} }, ctx)).toBeNull();
+  });
+});
+
+describe('hardening', () => {
+  it('does not throw when fields have the wrong type', () => {
+    const base = { message_id: 'x', id: 'i', sender_fbid: 1, timestamp_ms: {} };
+    const junk: unknown[] = [
+      { ...base, content_type: 'TEXT', content: 'x' },
+      { ...base, content_type: 'TEXT', text_body: 'a', reactions: {} },
+      { ...base, content_type: 'IMAGES', content: { __typename: 'SlideMessageImageContent', attachments: [null] } },
+      { ...base, content_type: 'VIDEOS', content: { __typename: 'SlideMessageVideosContent', attachments: 'x' } },
+      { ...base, content_type: 'TEXT', text_body: 'a', slide_edit_history: [null, 5] },
+      { ...base, content_type: 'TEXT', text_body: 'a', slide_edit_history: Array.from({ length: 300000 }, (_, i) => ({ timestamp_ms: String(i) })) },
+      { ...base, content_type: 'TEXT', text_body: 'a', reactions: [null, 5, { reaction: 3 }, { reaction: 'x', sender_fbid: {} }], replied_to_message: 'x' },
+      { ...base, content_type: 'MESSAGE_INLINE_SHARE', content: { xma: 'x' } }
+    ];
+    for (const j of junk) expect(() => normalizeMessage(j, ctx)).not.toThrow();
+    const edited = normalizeMessage(junk[5], ctx)!;
+    expect(edited.message.editedAt).toBe(299999);
+    expect(() => normalizeThread({ id: '1', users: 'x', slide_messages: 5, slide_read_receipts: [null], viewer: 'x' }, null)).not.toThrow();
+    expect(() => normalizeThread({ id: '1', users: [null, 5], slide_messages: { edges: [null, { node: 5 }] }, slide_read_receipts: [null, 'x'], admin_user_ids: 'x' }, 'me')).not.toThrow();
+    expect(() => normalizeReactions([null, 5, 'x', {}, { reaction: 1 }, { reaction: '' }], ctx)).not.toThrow();
+    expect(normalizeReactions([null, 5, {}, { reaction: '👍', sender_fbid: '900000000000002' }], ctx)).toEqual([{ emoji: '👍', userIds: ['9000000002'] }]);
+  });
+
+  it('accepts a pk id for users', () => {
+    expect(normalizeUser({ pk: 123, username: 'p' })!.user.id).toBe('123');
+  });
+
+  it('prefixes "You: " unless the snippet already has it', () => {
+    const t = (snippet: string) => {
+      const raw = { ...threadNodes[1]!, slide_messages: { edges: [{ node: { id: 'a', sender_fbid: '900000000000001', timestamp_ms: '1792090000000', igd_snippet: snippet } }] } };
+      return normalizeThread(raw, '9000000001')!.thread.lastMessagePreview;
+    };
+    expect(t('Youtube later?')).toBe('You: Youtube later?');
+    expect(t('You: already')).toBe('You: already');
   });
 });

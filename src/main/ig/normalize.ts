@@ -86,7 +86,7 @@ export function normalizeThread(raw: unknown, viewerIgid: string | null): Normal
       participants,
       adminIds: arr(r.admin_user_ids).map(str).filter(isPresent),
       lastActivityAt: num(r.last_activity_timestamp_ms) || (last ? num(last.timestamp_ms) : 0),
-      lastMessagePreview: lastFromViewer && snippet && !snippet.startsWith('You') ? `You: ${snippet}` : snippet,
+      lastMessagePreview: lastFromViewer && snippet && !snippet.startsWith('You: ') ? `You: ${snippet}` : snippet,
       unread: r.marked_as_unread === true || unreadByReceipt,
       muted: r.is_muted === true,
       avatarUrls: imageUrl ? [imageUrl] : participants.map((p) => p.avatarUrl).filter(Boolean).slice(0, 2)
@@ -207,7 +207,7 @@ export function normalizeMessage(raw: unknown, ctx: MessageContext): NormalizedM
         }
       : undefined;
   const edits = arr(r.slide_edit_history).map(obj).filter(isPresent);
-  const editedAt = edits.length ? Math.max(...edits.map((e) => num(e.timestamp_ms))) : 0;
+  const editedAt = edits.length ? edits.reduce((m, e) => Math.max(m, num(e.timestamp_ms)), 0) : 0;
 
   const message = {
     id,
