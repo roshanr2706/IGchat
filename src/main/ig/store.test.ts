@@ -154,8 +154,85 @@ describe('IgStore messages', () => {
     expect(fresh.find(T1, 'mid.$m1')?.clientTempId).toBe('temp-1');
   });
 
-  it('skips records with an unknown thread_fbid even when a threadId is given', () => {
-    expect(store.ingestMessages([{ ...node('mid.$m1'), thread_fbid: '999' }], { threadId: T1 })).toHaveLength(0);
+  it('files a record under the thread its fbid maps to, not opts.threadId', () => {
+    store.ingestMessages([node('mid.$m1')], { threadId: '1000000000000002' });
+    expect(store.find(T1, 'mid.$m1')).toBeDefined();
+    expect(store.find('1000000000000002', 'mid.$m1')).toBeUndefined();
+  });
+
+  it('accepts an unmapped fbid into opts.threadId and learns the mapping', () => {
+    const fresh = new IgStore();
+    expect(fresh.ingestMessages([node('mid.$m1')], { threadId: 'X' })).toHaveLength(1);
+    expect(fresh.find('X', 'mid.$m1')).toBeDefined();
+    fresh.ingestMessages([node('mid.$m2')]);
+    expect(fresh.find('X', 'mid.$m2')).toBeDefined();
+  });
+
+  it('skips records with neither a thread fbid nor a threadId', () => {
+    expect(store.ingestMessages([{ ...node('mid.$m1'), thread_fbid: undefined }])).toHaveLength(0);
+  });
+
+  it('parks orphan records and replays them when the thread arrives', () => {
+    const fresh = new IgStore();
+    const news = vi.fn();
+    fresh.events.on('msg:new', news);
+    expect(fresh.ingestMessages([node('mid.$m1')])).toHaveLength(0);
+    fresh.ingestThreads(threadNodes);
+    expect(news).toHaveBeenCalledTimes(1);
+    expect(news.mock.calls[0]![0]).toBe(T1);
+    expect(fresh.find(T1, 'mid.$m1')).toBeDefined();
+    fresh.ingestThreads(threadNodes);
+    expect(news).toHaveBeenCalledTimes(1);
+  });
+
+  it('replays orphans silently for a silent ingestThreads, and clear() empties the buffer', () => {
+    const fresh = new IgStore();
+    const news = vi.fn();
+    fresh.events.on('msg:new', news);
+    fresh.ingestMessages([node('mid.$m1')]);
+    fresh.ingestThreads(threadNodes, { silent: true });
+    expect(news).not.toHaveBeenCalled();
+    expect(fresh.find(T1, 'mid.$m1')).toBeDefined();
+    const other = new IgStore();
+    other.ingestMessages([node('mid.$m1')]);
+    other.clear();
+    other.ingestThreads(threadNodes, { silent: true });
+    expect(other.find(T1, 'mid.$m1')).toBeUndefined();
+  });
+
+  it('caps the orphan buffer at 500, dropping the oldest', () => {
+    const fresh = new IgStore();
+    const many = Array.from({ length: 600 }, (_, i) => ({ ...node('mid.$m1'), id: 'item-o' + i, message_id: 'mid.$o' + i, timestamp_ms: String(1792090000000 + i) }));
+    fresh.ingestMessages(many);
+    fresh.ingestThreads(threadNodes, { silent: true });
+    const ids = fresh.messagesOf(T1).map((m) => m.id);
+    expect(ids).toHaveLength(500);
+    expect(ids).not.toContain('mid.$o99');
+    expect(ids).toContain('mid.$o100');
+    expect(ids).toContain('mid.$o599');
+  });
+
+  it('evicts the oldest removed ids beyond 2000 and clear() resets the set', () => {
+    const mk = (i: number) => ({ ...node('mid.$m1'), id: 'item-r' + i, message_id: 'mid.$r' + i });
+    const many = Array.from({ length: 2001 }, (_, i) => mk(i));
+    store.ingestMessages(many, { silent: true });
+    for (let i = 0; i < 2001; i++) store.remove(T1, 'mid.$r' + i, true);
+    store.ingestMessages([mk(0), mk(1)], { silent: true });
+    expect(store.find(T1, 'mid.$r0')).toBeDefined();
+    expect(store.find(T1, 'mid.$r1')).toBeUndefined();
+    store.clear();
+    store.ingestThreads(threadNodes, { silent: true });
+    store.ingestMessages([mk(1)], { silent: true });
+    expect(store.find(T1, 'mid.$r1')).toBeDefined();
+  });
+
+  it('orders equal-activity threads by id', () => {
+    const same = threadNodes.map((n) => ({ ...n, last_activity_timestamp_ms: '1792090000000' }));
+    const fresh = new IgStore();
+    fresh.ingestThreads([same[1], same[0]], { silent: true });
+    const ids = fresh.threads().map((x) => x.id);
+    expect(ids).toEqual([...ids].sort());
+    expect(fresh.threads().map((x) => x.lastActivityAt)[0]).toBe(fresh.threads().map((x) => x.lastActivityAt)[1]);
   });
 
   it('is idempotent for repeated records and duplicate removal ids', () => {

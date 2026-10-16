@@ -8,6 +8,7 @@ export type IngestOptions = { silent?: boolean; threadId?: string };
 export type RemovalCandidate = { threadId: string; messageId: string; timestamp: number };
 
 const MAX_REMOVED = 2000;
+const MAX_ORPHANS = 500;
 const byTime = (a: Message, b: Message): number => a.timestamp - b.timestamp;
 const sameContent = (a: Message, b: Message): boolean => JSON.stringify({ ...a, clientTempId: undefined }) === JSON.stringify({ ...b, clientTempId: undefined });
 const field = (raw: unknown, key: string): string | undefined => {
@@ -26,6 +27,7 @@ export class IgStore {
   private readonly messagesByThread = new Map<string, Map<string, Message>>();
   private readonly itemIndex = new Map<string, { threadId: string; messageId: string }>();
   private readonly itemIdByMessage = new Map<string, string>();
+  private orphans: { fbid: string; raw: unknown }[] = [];
   private readonly recentlyRemoved = new Set<string>();
   private readonly pendingByOtid = new Map<string, string>();
 
@@ -42,6 +44,7 @@ export class IgStore {
     this.viewer = null;
     this.viewerFbid = null;
     for (const m of [this.threadsById, this.threadIdByFbid, this.igidByFbid, this.messagesByThread, this.itemIndex, this.itemIdByMessage, this.pendingByOtid, this.recentlyRemoved]) m.clear();
+    this.orphans = [];
   }
 
   ingestThreads(raws: unknown[], opts: IngestOptions = {}): Thread[] {
@@ -74,6 +77,7 @@ export class IgStore {
       if (!prev || JSON.stringify(prev.thread) !== JSON.stringify(n.thread)) changed.push(n.thread);
     }
     if (changed.length && !opts.silent) this.events.emit('inbox:updated', changed);
+    this.replayOrphans(opts.silent);
     return all;
   }
 
@@ -83,7 +87,17 @@ export class IgStore {
     const addedKeys = new Set<string>();
     for (const raw of raws) {
       const threadFbid = field(raw, 'thread_fbid');
-      const threadId = threadFbid ? this.threadIdByFbid.get(threadFbid) : opts.threadId;
+      let threadId = threadFbid ? this.threadIdByFbid.get(threadFbid) : opts.threadId;
+      if (!threadId && threadFbid) {
+        if (opts.threadId) {
+          this.threadIdByFbid.set(threadFbid, opts.threadId);
+          threadId = opts.threadId;
+        } else {
+          this.orphans.push({ fbid: threadFbid, raw });
+          if (this.orphans.length > MAX_ORPHANS) this.orphans.shift();
+          continue;
+        }
+      }
       if (!threadId) continue;
       const rawId = field(raw, 'message_id');
       if (rawId && this.recentlyRemoved.has(`${threadId}/${rawId}`)) continue;
@@ -120,6 +134,14 @@ export class IgStore {
     }
     for (const [threadId, list] of added) this.events.emit('msg:new', threadId, list.sort(byTime));
     return result;
+  }
+
+  private replayOrphans(silent?: boolean): void {
+    if (!this.orphans.length) return;
+    const ready = this.orphans.filter((o) => this.threadIdByFbid.has(o.fbid));
+    if (!ready.length) return;
+    this.orphans = this.orphans.filter((o) => !this.threadIdByFbid.has(o.fbid));
+    this.ingestMessages(ready.map((o) => o.raw), { silent });
   }
 
   upsertOwn(message: Message): void {
