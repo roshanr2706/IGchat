@@ -106,13 +106,66 @@ describe('IgStore messages', () => {
     expect(store.viewer).toBeNull();
   });
 
-  it('is idempotent for duplicate removal ids and repeated records', () => {
+  it('collapses a duplicate in one batch into one msg:new with the newer content', () => {
+    const news = vi.fn();
+    const updates = vi.fn();
+    store.events.on('msg:new', news);
+    store.events.on('msg:updated', updates);
+    store.ingestMessages([node('mid.$m1'), { ...node('mid.$m1'), reactions: [{ reaction: '🔥', sender_fbid: '900000000000001' }] }]);
+    expect(news).toHaveBeenCalledTimes(1);
+    expect(news.mock.calls[0]![1]).toHaveLength(1);
+    expect(news.mock.calls[0]![1][0].reactions).toEqual([{ emoji: '🔥', userIds: ['9000000001'] }]);
+    expect(updates).not.toHaveBeenCalled();
+  });
+
+  it('emits msg:removed once for duplicate tombstones and remove() afterwards, and ignores stale resurrection', () => {
+    const removed = vi.fn();
+    store.events.on('msg:removed', removed);
+    store.ingestMessages([node('mid.$m1')], { silent: true });
+    const dead = { ...node('mid.$m1'), tombstone_reason: 'UNSENT' };
+    store.ingestMessages([dead, dead]);
+    expect(store.remove(T1, 'mid.$m1')).toBe(false);
+    expect(removed).toHaveBeenCalledTimes(1);
+    expect(store.itemIdOf('mid.$m1')).toBeUndefined();
+    store.ingestMessages([node('mid.$m1')]);
+    expect(store.find(T1, 'mid.$m1')).toBeUndefined();
+  });
+
+  it('keeps the otid mapping through a silent ingest and tags on the later non-silent echo', () => {
+    const updates = vi.fn();
+    store.events.on('msg:updated', updates);
+    store.registerPending('7300000000000000001', 'temp-7');
+    store.ingestMessages([node('mid.$m1')], { silent: true });
+    expect(store.find(T1, 'mid.$m1')?.clientTempId).toBeUndefined();
+    store.ingestMessages([node('mid.$m1')]);
+    expect(updates).toHaveBeenCalledTimes(1);
+    expect(updates.mock.calls[0]![1]).toMatchObject({ id: 'mid.$m1', clientTempId: 'temp-7' });
+  });
+
+  it('does not emit a duplicate msg:new when an upsertOwn message is later echoed', () => {
+    const own = store.ingestMessages([node('mid.$m1')], { silent: true })[0]!;
+    const fresh = new IgStore();
+    fresh.ingestThreads(threadNodes, { silent: true });
+    const news = vi.fn();
+    fresh.events.on('msg:new', news);
+    fresh.upsertOwn({ ...own, clientTempId: 'temp-1' });
+    fresh.ingestMessages([node('mid.$m1')]);
+    expect(news).not.toHaveBeenCalled();
+    expect(fresh.find(T1, 'mid.$m1')?.clientTempId).toBe('temp-1');
+  });
+
+  it('skips records with an unknown thread_fbid even when a threadId is given', () => {
+    expect(store.ingestMessages([{ ...node('mid.$m1'), thread_fbid: '999' }], { threadId: T1 })).toHaveLength(0);
+  });
+
+  it('is idempotent for repeated records and duplicate removal ids', () => {
     const news = vi.fn();
     store.events.on('msg:new', news);
     store.ingestMessages(messageNodes);
+    const count = store.messagesOf(T1).length;
     store.ingestMessages(messageNodes);
     expect(news).toHaveBeenCalledTimes(1);
-    expect(store.messagesOf(T1).length).toBe(store.messagesOf(T1).length);
+    expect(store.messagesOf(T1)).toHaveLength(count);
     expect(store.candidatesForRemoval(['item-2', 'item-2'])).toHaveLength(1);
   });
 });

@@ -7,6 +7,7 @@ type ThreadEntry = { thread: Thread; fbid: string; threadKey: string; viewerWate
 export type IngestOptions = { silent?: boolean; threadId?: string };
 export type RemovalCandidate = { threadId: string; messageId: string; timestamp: number };
 
+const MAX_REMOVED = 2000;
 const byTime = (a: Message, b: Message): number => a.timestamp - b.timestamp;
 const sameContent = (a: Message, b: Message): boolean => JSON.stringify({ ...a, clientTempId: undefined }) === JSON.stringify({ ...b, clientTempId: undefined });
 const field = (raw: unknown, key: string): string | undefined => {
@@ -25,6 +26,7 @@ export class IgStore {
   private readonly messagesByThread = new Map<string, Map<string, Message>>();
   private readonly itemIndex = new Map<string, { threadId: string; messageId: string }>();
   private readonly itemIdByMessage = new Map<string, string>();
+  private readonly recentlyRemoved = new Set<string>();
   private readonly pendingByOtid = new Map<string, string>();
 
   setViewer(user: User, fbid: string | null): void {
@@ -39,12 +41,21 @@ export class IgStore {
   clear(): void {
     this.viewer = null;
     this.viewerFbid = null;
-    for (const m of [this.threadsById, this.threadIdByFbid, this.igidByFbid, this.messagesByThread, this.itemIndex, this.itemIdByMessage, this.pendingByOtid]) m.clear();
+    for (const m of [this.threadsById, this.threadIdByFbid, this.igidByFbid, this.messagesByThread, this.itemIndex, this.itemIdByMessage, this.pendingByOtid, this.recentlyRemoved]) m.clear();
   }
 
   ingestThreads(raws: unknown[], opts: IngestOptions = {}): Thread[] {
     const all: Thread[] = [];
     const changed: Thread[] = [];
+    if (!this.viewer) {
+      for (const raw of raws) {
+        const v = raw && typeof raw === 'object' ? normalizeUser((raw as Record<string, unknown>).viewer)?.user : undefined;
+        if (v) {
+          this.viewer = v;
+          break;
+        }
+      }
+    }
     for (const raw of raws) {
       const n = normalizeThread(raw, this.viewer?.id ?? null);
       if (!n) continue;
@@ -69,20 +80,22 @@ export class IgStore {
   ingestMessages(raws: unknown[], opts: IngestOptions = {}): Message[] {
     const result: Message[] = [];
     const added = new Map<string, Message[]>();
+    const addedKeys = new Set<string>();
     for (const raw of raws) {
       const threadFbid = field(raw, 'thread_fbid');
-      const threadId = (threadFbid ? this.threadIdByFbid.get(threadFbid) : undefined) ?? opts.threadId;
+      const threadId = threadFbid ? this.threadIdByFbid.get(threadFbid) : opts.threadId;
       if (!threadId) continue;
+      const rawId = field(raw, 'message_id');
+      if (rawId && this.recentlyRemoved.has(`${threadId}/${rawId}`)) continue;
       const bucket = this.bucket(threadId);
       const n = normalizeMessage(raw, this.context(threadId));
       if (!n) {
-        const gone = field(raw, 'message_id');
-        if (gone && field(raw, 'tombstone_reason') && bucket.has(gone)) this.remove(threadId, gone, opts.silent);
+        if (rawId && field(raw, 'tombstone_reason') && bucket.has(rawId)) this.remove(threadId, rawId, opts.silent);
         continue;
       }
       const prev = bucket.get(n.message.id);
       let message = n.message;
-      const temp = n.otid ? this.pendingByOtid.get(n.otid) : undefined;
+      const temp = !opts.silent && n.otid ? this.pendingByOtid.get(n.otid) : undefined;
       if (temp) {
         message = { ...message, clientTempId: temp };
         this.pendingByOtid.delete(n.otid!);
@@ -94,8 +107,16 @@ export class IgStore {
       bucket.set(message.id, message);
       result.push(message);
       if (opts.silent) continue;
-      if (!prev) added.set(threadId, [...(added.get(threadId) ?? []), message]);
-      else if (!sameContent(prev, message)) this.events.emit('msg:updated', threadId, message);
+      const key = `${threadId}/${message.id}`;
+      if (addedKeys.has(key)) {
+        const list = added.get(threadId)!;
+        list[list.findIndex((m) => m.id === message.id)] = message;
+      } else if (!prev) {
+        addedKeys.add(key);
+        added.set(threadId, [...(added.get(threadId) ?? []), message]);
+      } else if (!sameContent(prev, message) || prev.clientTempId !== message.clientTempId) {
+        this.events.emit('msg:updated', threadId, message);
+      }
     }
     for (const [threadId, list] of added) this.events.emit('msg:new', threadId, list.sort(byTime));
     return result;
@@ -107,6 +128,11 @@ export class IgStore {
 
   remove(threadId: string, messageId: string, silent = false): boolean {
     if (!this.messagesByThread.get(threadId)?.delete(messageId)) return false;
+    const itemId = this.itemIdByMessage.get(messageId);
+    if (itemId) this.itemIndex.delete(itemId);
+    this.itemIdByMessage.delete(messageId);
+    this.recentlyRemoved.add(`${threadId}/${messageId}`);
+    if (this.recentlyRemoved.size > MAX_REMOVED) this.recentlyRemoved.delete(this.recentlyRemoved.values().next().value!);
     if (!silent) this.events.emit('msg:removed', threadId, messageId);
     return true;
   }
@@ -124,7 +150,7 @@ export class IgStore {
   }
 
   threads(): Thread[] {
-    return [...this.threadsById.values()].map((e) => e.thread).sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+    return [...this.threadsById.values()].map((e) => e.thread).sort((a, b) => b.lastActivityAt - a.lastActivityAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   }
 
   threadKey(id: string): string {
