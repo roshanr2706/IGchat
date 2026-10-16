@@ -20,22 +20,31 @@ function relayRecords(): Record<string, Rec> {
     },
     smc5: { __id: 'smc5', __typename: 'Conn', edges: { __refs: [] }, page_info: null },
     smc20: { __id: 'smc20', __typename: 'Conn', edges: { __refs: ['e1'] }, page_info: null },
-    e1: { __id: 'e1', __typename: 'Edge', node: { __ref: 'm1' }, cursor: 'x' },
+    e1: { __id: 'e1', __typename: 'Edge', node: { __ref: 'mid.$m1' }, cursor: 'x' },
     u1: { __id: 'u1', __typename: 'XDTUserDict', id: '9000000001', interop_messaging_user_fbid: '900000000000001', profile_pic_url: 'https://scontent.cdninstagram.com/me.jpg' },
     u2: { __id: 'u2', __typename: 'XDTUserDict', id: '9000000002', username: 'alex_r', interop_messaging_user_fbid: '900000000000002' },
-    m1: { __id: 'm1', __typename: 'SlideMessage', id: 'item-1', message_id: 'mid.$m1', thread_fbid: '100', sender_fbid: '900000000000002', timestamp_ms: '1', content_type: 'TEXT', content: { __ref: 'c1' } },
+    'mid.$m1': { __id: 'mid.$m1', __typename: 'SlideMessage', id: 'item-1', message_id: 'mid.$m1', thread_fbid: '100', sender_fbid: '900000000000002', timestamp_ms: '1', content_type: 'TEXT', content: { __ref: 'c1' } },
     c1: { __id: 'c1', __typename: 'SlideMessageText', text_body: 'hi' }
   };
 }
 
 let records: Record<string, Rec>;
-let store: { notify: () => void; getSource: () => { getRecordIDs: () => string[]; get: (id: string) => Rec | undefined } };
+let failGet = false;
+let store: { notify: (...args: unknown[]) => unknown; getSource: () => unknown };
 let cdp: FakeCdp;
 let page: FakePage;
 
 beforeEach(() => {
   records = relayRecords();
-  store = { notify: () => {}, getSource: () => ({ getRecordIDs: () => Object.keys(records), get: (id) => records[id] }) };
+  failGet = false;
+  const source = {
+    getRecordIDs: () => Object.keys(records),
+    get: (id: string) => {
+      if (failGet) throw new Error('boom');
+      return records[id];
+    }
+  };
+  store = { notify: () => {}, getSource: () => source };
   const env = { getStore: () => store };
   w.require = (name: string) => {
     if (name === 'PolarisRelayEnvironmentFactory') return { defaultEnvironment: env };
@@ -55,6 +64,7 @@ afterEach(() => {
   delete w.require;
   delete w.__igchatRelay;
   delete w[RELAY_BINDING];
+  document.body.innerHTML = '';
 });
 
 describe('relay bridge + feed', () => {
@@ -89,10 +99,10 @@ describe('relay bridge + feed', () => {
     const d = deltas.mock.calls[0]![0];
     expect(d.messages).toEqual([expect.objectContaining({ message_id: 'mid.$m1', content: expect.objectContaining({ text_body: 'edited' }) })]);
     expect(d.removed).toEqual([]);
-    delete records.m1;
+    delete records['mid.$m1'];
     store.notify();
     vi.advanceTimersByTime(100);
-    expect(deltas.mock.calls[1]![0].removed).toEqual(['m1']);
+    expect(deltas.mock.calls[1]![0].removed).toEqual(['mid.$m1']);
   });
 
   it('reports unavailable when the store cannot be found', async () => {
@@ -125,6 +135,150 @@ describe('relay bridge + feed', () => {
   });
 });
 
+describe('relay bridge hardening', () => {
+  const feedOf = () => new RelayFeed(cdp, page, { retries: 2, sleep: async () => {} });
+
+  it('a second install returns already and wraps notify once', async () => {
+    const original = vi.fn();
+    store.notify = original;
+    const feed = feedOf();
+    expect(await feed.install()).toBe('live');
+    const wrapped = store.notify;
+    expect(await feed.install()).toBe('live');
+    expect(store.notify).toBe(wrapped);
+    // Even with the page API gone, the marked wrapper is detected.
+    delete w.__igchatRelay;
+    expect((0, eval)(`${BRIDGE}("x")`)).toBe('already');
+    expect(store.notify).toBe(wrapped);
+    store.notify();
+    expect(original).toHaveBeenCalledTimes(1);
+  });
+
+  it('a retry after a failing scan does not stack wrappers', async () => {
+    const original = vi.fn();
+    store.notify = original;
+    const src = store.getSource() as { getRecordIDs: () => string[] };
+    const ids = src.getRecordIDs;
+    let n = 0;
+    src.getRecordIDs = () => {
+      if (n++ === 0) throw new Error('not ready');
+      return ids();
+    };
+    expect(await feedOf().install()).toBe('live');
+    expect(page.scripts).toHaveLength(2);
+    store.notify();
+    expect(original).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps this, args and return value of the original notify', async () => {
+    const seen: { self: unknown; args: unknown[] }[] = [];
+    store.notify = function (this: unknown, ...args: unknown[]) {
+      seen.push({ self: this, args });
+      return 'ret';
+    };
+    await feedOf().install();
+    expect(store.notify.call(store, 1, 2)).toBe('ret');
+    expect(seen).toEqual([{ self: store, args: [1, 2] }]);
+  });
+
+  it('does not throw into the page when the store throws during a flush, and retries later', async () => {
+    vi.useFakeTimers();
+    const feed = feedOf();
+    await feed.attach();
+    await feed.install();
+    const deltas = vi.fn();
+    feed.events.on('delta', deltas);
+    records.c1 = { ...records.c1, text_body: 'edited' };
+    failGet = true;
+    store.notify();
+    expect(() => vi.advanceTimersByTime(100)).not.toThrow();
+    expect(deltas).not.toHaveBeenCalled();
+    failGet = false;
+    store.notify();
+    vi.advanceTimersByTime(100);
+    expect(deltas).toHaveBeenCalledTimes(1);
+  });
+
+  it('chunks an oversized delta without losing records and counts unsendable ones', async () => {
+    vi.useFakeTimers();
+    const feed = feedOf();
+    await feed.attach();
+    await feed.install();
+    const got: string[] = [];
+    feed.events.on('delta', (d) => got.push(...d.messages.map((m) => (m as Rec).message_id)));
+    for (const n of [1, 2, 3]) {
+      records[`mid.$big${n}`] = { __id: `mid.$big${n}`, __typename: 'SlideMessage', message_id: `mid.$big${n}`, blob: 'x'.repeat(3_000_000) };
+    }
+    store.notify();
+    vi.advanceTimersByTime(100);
+    expect([...got].sort()).toEqual(['mid.$big1', 'mid.$big2', 'mid.$big3']);
+    expect(feed.dropped).toBe(0);
+    records['mid.$huge'] = { __id: 'mid.$huge', __typename: 'SlideMessage', message_id: 'mid.$huge', blob: 'x'.repeat(8_000_000) };
+    records.c1 = { ...records.c1, text_body: 'again' };
+    store.notify();
+    vi.advanceTimersByTime(100);
+    expect(feed.dropped).toBe(1);
+    expect(got).toContain('mid.$m1');
+    expect(got).not.toContain('mid.$huge');
+  });
+
+  it('snapshot reports removals', async () => {
+    const feed = feedOf();
+    await feed.install();
+    delete records['mid.$m1'];
+    expect((await feed.snapshot())!.removed).toEqual(['mid.$m1']);
+  });
+
+  it('finds the environment in a non-first React root', async () => {
+    w.require = () => {
+      throw new Error('nope');
+    };
+    const mk = (fiber: unknown) => {
+      const el = document.createElement('div');
+      (el as unknown as Record<string, unknown>)['__reactContainer$t'] = { current: fiber };
+      document.body.appendChild(el);
+    };
+    mk({ memoizedProps: {}, child: null, sibling: null });
+    mk({ memoizedProps: {}, child: { memoizedProps: { environment: { getStore: () => store } } } });
+    expect(await feedOf().install()).toBe('live');
+  });
+
+  it('detach uninstalls the bridge, restores notify and ignores an in-flight install', async () => {
+    const original = store.notify;
+    const feed = feedOf();
+    await feed.install();
+    expect(store.notify).not.toBe(original);
+    feed.detach();
+    await flush();
+    expect(store.notify).toBe(original);
+    expect(w.__igchatRelay).toBeUndefined();
+    expect(feed.status).toBe('pending');
+    const pendingInstall = feed.install();
+    feed.detach();
+    await pendingInstall;
+    await flush();
+    expect(feed.status).toBe('pending');
+    expect(store.notify).toBe(original);
+  });
+
+  it('does not emit pending when re-installing while live', async () => {
+    const feed = feedOf();
+    await feed.install();
+    const statuses: string[] = [];
+    feed.events.on('status', (s) => statuses.push(s));
+    await feed.install();
+    expect(statuses).toEqual([]);
+  });
+
+  it('reports unavailable for an invalid snapshot result', async () => {
+    const feed = feedOf();
+    await feed.install();
+    page.handler = () => ({ nonsense: true });
+    expect(await feed.snapshot()).toBeNull();
+    expect(feed.status).toBe('unavailable');
+  });
+});
+
 describe('parseRelayPayload', () => {
   it('accepts well-formed deltas', () => {
     expect(parseRelayPayload('{"threads":[],"messages":[{"a":1}],"removed":["x"]}')).toEqual({ threads: [], messages: [{ a: 1 }], removed: ['x'] });
@@ -132,6 +286,8 @@ describe('parseRelayPayload', () => {
 
   it('rejects malformed or oversized payloads', () => {
     expect(parseRelayPayload(42)).toBeNull();
+    expect(parseRelayPayload('null')).toBeNull();
+    expect(parseRelayPayload('[]')).toBeNull();
     expect(parseRelayPayload('{oops')).toBeNull();
     expect(parseRelayPayload('{"threads":[],"messages":{}}')).toBeNull();
     expect(parseRelayPayload('{"threads":[],"messages":[],"removed":[1]}')).toBeNull();

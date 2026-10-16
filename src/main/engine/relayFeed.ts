@@ -16,14 +16,22 @@ function asDelta(v: unknown): RelayDelta | null {
   return { threads: v.threads, messages: v.messages, removed: v.removed as string[] };
 }
 
-/** Validates a binding payload from the page. Untrusted: size-limited and shape-checked. */
-export function parseRelayPayload(text: unknown): RelayDelta | null {
+function parseRaw(text: unknown): { delta: RelayDelta; dropped: number } | null {
   if (typeof text !== 'string' || text.length > MAX_RELAY_PAYLOAD) return null;
   try {
-    return asDelta(JSON.parse(text));
+    const raw: unknown = JSON.parse(text);
+    const delta = asDelta(raw);
+    if (!delta || !isObj(raw)) return null;
+    const d = raw.dropped;
+    return { delta, dropped: typeof d === 'number' && Number.isFinite(d) && d >= 0 ? Math.floor(d) : 0 };
   } catch {
     return null;
   }
+}
+
+/** Validates a binding payload from the page. Untrusted: size-limited and shape-checked. */
+export function parseRelayPayload(text: unknown): RelayDelta | null {
+  return parseRaw(text)?.delta ?? null;
 }
 
 export function parseRelaySnapshot(value: unknown): RelaySnapshot | null {
@@ -41,6 +49,9 @@ export function parseRelaySnapshot(value: unknown): RelaySnapshot | null {
 export class RelayFeed {
   readonly events = new Emitter<RelayEvents>();
   status: RelayStatus = 'pending';
+  /** How many records the page had to skip (too large to send). A count only; never any data. */
+  dropped = 0;
+  private generation = 0;
   private off: (() => void) | null = null;
   private installing: Promise<RelayStatus> | null = null;
 
@@ -55,8 +66,10 @@ export class RelayFeed {
     this.off?.();
     this.off = this.cdp.onEvent((method, params) => {
       if (method !== 'Runtime.bindingCalled' || params?.name !== RELAY_BINDING) return;
-      const delta = parseRelayPayload(params.payload);
-      if (delta) this.events.emit('delta', delta);
+      const parsed = parseRaw(params.payload);
+      if (!parsed) return;
+      this.dropped = parsed.dropped;
+      this.events.emit('delta', parsed.delta);
     });
     await this.cdp.send('Runtime.enable');
     await this.cdp.send('Runtime.addBinding', { name: RELAY_BINDING });
@@ -64,22 +77,32 @@ export class RelayFeed {
 
   /** Injects the bridge (after every full page load). Retries while the page is still building its store. */
   install(): Promise<RelayStatus> {
-    this.installing ??= this.doInstall().finally(() => {
-      this.installing = null;
-    });
+    if (!this.installing) {
+      const p: Promise<RelayStatus> = this.doInstall().finally(() => {
+        if (this.installing === p) this.installing = null;
+      });
+      this.installing = p;
+    }
     return this.installing;
   }
 
   private async doInstall(): Promise<RelayStatus> {
-    this.setStatus('pending');
+    const gen = this.generation;
+    if (this.status !== 'live') this.setStatus('pending');
     const retries = this.opts.retries ?? 10;
     const sleep = this.opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     for (let attempt = 0; attempt < retries; attempt++) {
+      if (gen !== this.generation) return this.status;
       let result: unknown;
       try {
         result = await this.page.evaluate(`${BRIDGE_SOURCE}(${JSON.stringify(RELAY_BINDING)})`);
       } catch {
         result = 'unavailable';
+      }
+      if (gen !== this.generation) {
+        // Detached while this attempt was in flight: take back whatever it installed.
+        if (result === 'live') this.uninstallInPage();
+        return this.status;
       }
       if (result === 'live' || result === 'already') {
         this.setStatus('live');
@@ -87,6 +110,7 @@ export class RelayFeed {
       }
       if (attempt < retries - 1) await sleep(this.opts.retryDelayMs ?? 1000);
     }
+    if (gen !== this.generation) return this.status;
     this.setStatus('unavailable');
     return 'unavailable';
   }
@@ -94,7 +118,11 @@ export class RelayFeed {
   async snapshot(): Promise<RelaySnapshot | null> {
     if (this.status !== 'live') return null;
     try {
-      return parseRelaySnapshot(await this.page.evaluate('window.__igchatRelay ? window.__igchatRelay.snapshot() : null'));
+      const raw = await this.page.evaluate('window.__igchatRelay ? window.__igchatRelay.snapshot() : null');
+      const size = JSON.stringify(raw)?.length ?? 0;
+      const snap = size > 0 && size <= MAX_RELAY_PAYLOAD ? parseRelaySnapshot(raw) : null;
+      if (!snap) this.setStatus('unavailable');
+      return snap;
     } catch {
       return null;
     }
@@ -103,6 +131,19 @@ export class RelayFeed {
   detach(): void {
     this.off?.();
     this.off = null;
+    this.generation++;
+    this.installing = null;
+    this.uninstallInPage();
+    this.setStatus('pending');
+  }
+
+  /** Best effort: restores the page's original notify and stops its timers. */
+  private uninstallInPage(): void {
+    try {
+      void Promise.resolve(this.page.evaluate('window.__igchatRelay && window.__igchatRelay.uninstall && window.__igchatRelay.uninstall()')).catch(() => {});
+    } catch {
+      // ignore
+    }
   }
 
   private setStatus(s: RelayStatus): void {
