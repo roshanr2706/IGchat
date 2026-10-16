@@ -2,7 +2,7 @@
 // Reads Instagram's own Relay store and pushes changed thread/message records to IGchat through a CDP binding.
 // It never makes network requests and never modifies records; it only wraps store.notify (always calling the original).
 // Nothing in here may throw into the page: timer and notify paths are guarded.
-(function install(bindingName) {
+(function install(bindingName, token) {
   'use strict';
   if (window.__igchatRelay) return 'already';
   var MESSAGE = 'SlideMessage';
@@ -219,13 +219,19 @@
 
     var api = {
       dropped: 0,
+      token: token,
       snapshot: function () {
         var d = scan(true);
         var records = { threads: [], messages: [] };
         for (var i = 0; i < d.changed.length; i++) (d.changed[i].kind === 'm' ? records.messages : records.threads).push(d.changed[i].value);
-        return { threads: records.threads, messages: records.messages, removed: d.removed, viewer: viewer(), inbox: inbox() };
+        var snap = { threads: records.threads, messages: records.messages, removed: d.removed, viewer: viewer(), inbox: inbox() };
+        // Measure here so oversized data never crosses CDP.
+        var size = JSON.stringify(snap).length;
+        return size > MAX_PAYLOAD ? { tooLarge: true } : snap;
       },
-      uninstall: function () {
+      // A no-op unless the token matches, so a stale install can never remove a newer bridge.
+      uninstall: function (t) {
+        if (t !== token) return;
         active = false;
         if (timer) clearTimeout(timer);
         timer = null;

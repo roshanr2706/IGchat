@@ -270,13 +270,98 @@ describe('relay bridge hardening', () => {
     expect(statuses).toEqual([]);
   });
 
-  it('reports unavailable for an invalid snapshot result', async () => {
+  it('an invalid snapshot result returns null without changing the status', async () => {
     const feed = feedOf();
     await feed.install();
     page.handler = () => ({ nonsense: true });
     expect(await feed.snapshot()).toBeNull();
+    expect(feed.status).toBe('live');
+  });
+
+  it('an oversized snapshot is measured in the page, returns null and leaves the status live', async () => {
+    const feed = feedOf();
+    await feed.install();
+    records['mid.$huge'] = { __id: 'mid.$huge', __typename: 'SlideMessage', message_id: 'mid.$huge', blob: 'x'.repeat(8_000_000) };
+    expect((0, eval)('window.__igchatRelay.snapshot()')).toEqual({ tooLarge: true });
+    expect(await feed.snapshot()).toBeNull();
+    expect(feed.status).toBe('live');
+  });
+
+  it('a missing bridge makes the snapshot unavailable', async () => {
+    const feed = feedOf();
+    await feed.install();
+    delete w.__igchatRelay;
+    expect(await feed.snapshot()).toBeNull();
     expect(feed.status).toBe('unavailable');
   });
+
+  it('a stale install resolving late cannot uninstall a newer bridge', async () => {
+    const original = store.notify;
+    const feed = feedOf();
+    let release: () => void = () => {};
+    let first = true;
+    page.handler = (script) => {
+      const result = (0, eval)(script);
+      if (first) {
+        first = false;
+        return new Promise((r) => (release = () => r('live')));
+      }
+      return result;
+    };
+    const a = feed.install(); // A installs in the page but its evaluate has not resolved yet
+    await flush();
+    feed.detach(); // removes A
+    await flush();
+    expect(w.__igchatRelay).toBeUndefined();
+    expect(await feed.install()).toBe('live'); // B
+    const bridgeB = w.__igchatRelay;
+    const wrappedB = store.notify;
+    release();
+    await a;
+    await flush();
+    expect(w.__igchatRelay).toBe(bridgeB);
+    expect(store.notify).toBe(wrappedB);
+    expect(store.notify).not.toBe(original);
+    expect(feed.status).toBe('live');
+  });
+
+  it('commits earlier chunks and resends the rest when the binding throws partway', async () => {
+    vi.useFakeTimers();
+    const feed = feedOf();
+    await feed.attach();
+    await feed.install();
+    const got: string[] = [];
+    feed.events.on('delta', (d) => got.push(...d.messages.map((m) => (m as Rec).message_id)));
+    const emit = w[RELAY_BINDING] as (p: string) => void;
+    let calls = 0;
+    w[RELAY_BINDING] = (p: string) => {
+      if (++calls === 2) throw new Error('binding down');
+      emit(p);
+    };
+    for (const n of [1, 2, 3]) {
+      records[`mid.$big${n}`] = { __id: `mid.$big${n}`, __typename: 'SlideMessage', message_id: `mid.$big${n}`, blob: 'x'.repeat(3_000_000) };
+    }
+    store.notify();
+    expect(() => vi.advanceTimersByTime(100)).not.toThrow();
+    expect(got).toEqual(['mid.$big1', 'mid.$big2']);
+    store.notify();
+    vi.advanceTimersByTime(100);
+    expect(got).toEqual(['mid.$big1', 'mid.$big2', 'mid.$big3']);
+  });
+
+  it('emits dropped when the count rises', async () => {
+    vi.useFakeTimers();
+    const feed = feedOf();
+    await feed.attach();
+    await feed.install();
+    const counts: number[] = [];
+    feed.events.on('dropped', (n) => counts.push(n));
+    records['mid.$huge'] = { __id: 'mid.$huge', __typename: 'SlideMessage', message_id: 'mid.$huge', blob: 'x'.repeat(8_000_000) };
+    store.notify();
+    vi.advanceTimersByTime(100);
+    expect(counts).toEqual([1]);
+  });
+
 });
 
 describe('parseRelayPayload', () => {

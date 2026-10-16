@@ -6,7 +6,7 @@ export const RELAY_BINDING = '__igchatRelayEmit';
 export const MAX_RELAY_PAYLOAD = 8_000_000;
 
 export type RelayStatus = 'pending' | 'live' | 'unavailable';
-type RelayEvents = { delta: (d: RelayDelta) => void; status: (s: RelayStatus) => void };
+type RelayEvents = { delta: (d: RelayDelta) => void; status: (s: RelayStatus) => void; dropped: (count: number) => void };
 
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 
@@ -52,6 +52,9 @@ export class RelayFeed {
   /** How many records the page had to skip (too large to send). A count only; never any data. */
   dropped = 0;
   private generation = 0;
+  private tokenSeq = 0;
+  /** Token of the bridge this feed installed (or adopted); only that bridge may be uninstalled. */
+  private token: string | null = null;
   private off: (() => void) | null = null;
   private installing: Promise<RelayStatus> | null = null;
 
@@ -68,7 +71,9 @@ export class RelayFeed {
       if (method !== 'Runtime.bindingCalled' || params?.name !== RELAY_BINDING) return;
       const parsed = parseRaw(params.payload);
       if (!parsed) return;
+      const rose = parsed.dropped > this.dropped;
       this.dropped = parsed.dropped;
+      if (rose) this.events.emit('dropped', parsed.dropped);
       this.events.emit('delta', parsed.delta);
     });
     await this.cdp.send('Runtime.enable');
@@ -88,21 +93,28 @@ export class RelayFeed {
 
   private async doInstall(): Promise<RelayStatus> {
     const gen = this.generation;
+    const token = `${Date.now().toString(36)}-${++this.tokenSeq}-${Math.random().toString(36).slice(2)}`;
     if (this.status !== 'live') this.setStatus('pending');
     const retries = this.opts.retries ?? 10;
     const sleep = this.opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     for (let attempt = 0; attempt < retries; attempt++) {
       if (gen !== this.generation) return this.status;
       let result: unknown;
+      this.token = token;
       try {
-        result = await this.page.evaluate(`${BRIDGE_SOURCE}(${JSON.stringify(RELAY_BINDING)})`);
+        result = await this.page.evaluate(`${BRIDGE_SOURCE}(${JSON.stringify(RELAY_BINDING)}, ${JSON.stringify(token)})`);
       } catch {
         result = 'unavailable';
       }
       if (gen !== this.generation) {
         // Detached while this attempt was in flight: take back whatever it installed.
-        if (result === 'live') this.uninstallInPage();
+        if (result === 'live') this.uninstallInPage(token);
         return this.status;
+      }
+      if (result === 'live') this.dropped = 0;
+      if (result === 'already') {
+        this.token = await this.pageToken();
+        if (gen !== this.generation) return this.status;
       }
       if (result === 'live' || result === 'already') {
         this.setStatus('live');
@@ -119,10 +131,14 @@ export class RelayFeed {
     if (this.status !== 'live') return null;
     try {
       const raw = await this.page.evaluate('window.__igchatRelay ? window.__igchatRelay.snapshot() : null');
-      const size = JSON.stringify(raw)?.length ?? 0;
-      const snap = size > 0 && size <= MAX_RELAY_PAYLOAD ? parseRelaySnapshot(raw) : null;
-      if (!snap) this.setStatus('unavailable');
-      return snap;
+      if (raw === null || raw === undefined) {
+        // The bridge is gone (for example after a reload).
+        this.setStatus('unavailable');
+        return null;
+      }
+      // Too large or invalid: no snapshot, but the live feed itself is unaffected.
+      if ((JSON.stringify(raw)?.length ?? 0) > MAX_RELAY_PAYLOAD) return null;
+      return parseRelaySnapshot(raw);
     } catch {
       return null;
     }
@@ -133,16 +149,29 @@ export class RelayFeed {
     this.off = null;
     this.generation++;
     this.installing = null;
-    this.uninstallInPage();
+    this.uninstallInPage(this.token);
+    this.token = null;
     this.setStatus('pending');
   }
 
   /** Best effort: restores the page's original notify and stops its timers. */
-  private uninstallInPage(): void {
+  private uninstallInPage(token: string | null): void {
+    if (!token) return;
     try {
-      void Promise.resolve(this.page.evaluate('window.__igchatRelay && window.__igchatRelay.uninstall && window.__igchatRelay.uninstall()')).catch(() => {});
+      const script = `window.__igchatRelay && window.__igchatRelay.uninstall && window.__igchatRelay.uninstall(${JSON.stringify(token)})`;
+      void Promise.resolve(this.page.evaluate(script)).catch(() => {});
     } catch {
       // ignore
+    }
+  }
+
+  /** Token of the bridge currently in the page, so an existing install can be adopted. */
+  private async pageToken(): Promise<string | null> {
+    try {
+      const t = await this.page.evaluate('window.__igchatRelay ? window.__igchatRelay.token : null');
+      return typeof t === 'string' ? t : null;
+    } catch {
+      return null;
     }
   }
 
