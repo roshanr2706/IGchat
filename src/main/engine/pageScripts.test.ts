@@ -62,6 +62,17 @@ describe('page scripts', () => {
     expect(click).toHaveBeenCalledTimes(1);
   });
 
+  it('targets the last file input, the same one setFileOnPageInput fills', () => {
+    document.body.innerHTML = '<form id="a"><input type="file"><button type="submit">A</button></form><form id="b"><input type="file"><button type="submit">B</button></form>';
+    const a = vi.fn();
+    const b = vi.fn();
+    document.querySelector('#a button')!.addEventListener('click', a);
+    document.querySelector('#b button')!.addEventListener('click', b);
+    expect(run(CLICK_SEND_SCRIPT)).toBe(true);
+    expect(a).not.toHaveBeenCalled();
+    expect(b).toHaveBeenCalledTimes(1);
+  });
+
   it('matches the thread url with or without a trailing slash', () => {
     expect(pathMatchesThread('https://www.instagram.com/direct/t/222/', '222')).toBe(true);
     expect(pathMatchesThread('https://www.instagram.com/direct/t/222', '222')).toBe(true);

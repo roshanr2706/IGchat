@@ -21,7 +21,9 @@ const h = vi.hoisted(() => {
     responses = new Map<string, unknown>();
     attach(): void {}
     detach(): void {}
+    sent: string[] = [];
     async sendCommand(method: string): Promise<unknown> {
+      this.sent.push(method);
       return this.responses.get(method) ?? {};
     }
   }
@@ -71,7 +73,7 @@ const h = vi.hoisted(() => {
     }
     destroy(): void {}
   }
-  const state = { wins: [] as FakeWindow[], cookies: [] as unknown[], nextUrl: null as null | ((u: string) => string) };
+  const state = { wins: [] as FakeWindow[], opened: [] as string[], cookies: [] as unknown[], nextUrl: null as null | ((u: string) => string) };
   return { FakeWindow, state };
 });
 
@@ -86,7 +88,7 @@ vi.mock('electron', () => ({
       clearCache: async () => {}
     })
   },
-  shell: { openExternal: () => {} }
+  shell: { openExternal: (u: string) => h.state.opened.push(u) }
 }));
 
 import { EngineWindow, ENGINE_START_URL } from './engineWindow';
@@ -99,6 +101,7 @@ const win = (): InstanceType<typeof h.FakeWindow> => h.state.wins.at(-1)!;
 beforeEach(() => {
   h.state.wins.length = 0;
   h.state.cookies = [];
+  h.state.opened.length = 0;
   h.state.nextUrl = null;
 });
 
@@ -192,7 +195,7 @@ describe('EngineWindow thread navigation', () => {
     await expect(e.navigateToThread('222')).rejects.toMatchObject({ code: 'Unknown' });
   });
 
-  it('throws when no send button is found after attaching', async () => {
+  it('resolves even when no send button is found after the file is handed over', async () => {
     const e = await readyEngine();
     const wc = win().webContents;
     wc.debugger.responses.set('DOM.getDocument', { root: { nodeId: 1 } });
@@ -202,6 +205,113 @@ describe('EngineWindow thread navigation', () => {
       w.url = 'https://www.instagram.com/direct/t/222/';
       return true;
     };
+    await expect(e.attachImage('222', 'x')).resolves.toBeUndefined();
+    expect(wc.debugger.sent).toContain('DOM.setFileInputFiles');
+  });
+
+  it('still throws before the handoff when there is no file input', async () => {
+    const e = await readyEngine();
+    const wc = win().webContents;
+    wc.debugger.responses.set('DOM.getDocument', { root: { nodeId: 1 } });
+    wc.debugger.responses.set('DOM.querySelectorAll', { nodeIds: [] });
+    wc.js = (_s, w) => {
+      w.url = 'https://www.instagram.com/direct/t/222/';
+      return true;
+    };
     await expect(e.attachImage('222', 'x')).rejects.toMatchObject({ code: 'Unknown' });
+  });
+});
+
+describe('EngineWindow handover to the user', () => {
+  const LOGIN = 'https://www.instagram.com/accounts/login/';
+  const nav = async (url: string): Promise<void> => {
+    const wc = win().webContents;
+    wc.url = url;
+    wc.emit('did-navigate', {}, url);
+    await flush();
+    await flush();
+  };
+
+  it('does not bounce a needsUser account page even with a session cookie', async () => {
+    h.state.nextUrl = (u) => (u === INBOX ? LOGIN : u);
+    const e = new EngineWindow({ sleep: instant });
+    await e.start();
+    h.state.cookies = [{}];
+    await nav('https://www.instagram.com/accounts/password/change/');
+    expect(win().webContents.loads).toEqual(['about:blank', INBOX]);
+    expect(e.state).toBe('needsUser');
+  });
+
+  it('sends the post-login landing page back to the inbox', async () => {
+    h.state.nextUrl = (u) => (u === INBOX ? LOGIN : u);
+    const e = new EngineWindow({ sleep: instant });
+    await e.start();
+    h.state.cookies = [{}];
+    win().webContents.nextUrl = (u) => u;
+    await nav('https://www.instagram.com/?next=x');
+    await vi.waitFor(() => expect(e.state).toBe('ready'));
+    expect(win().webContents.loads.filter((u) => u === INBOX)).toHaveLength(2);
+  });
+
+  it('stays hands-off after giving up, even long afterwards', async () => {
+    h.state.nextUrl = (u) => (u === INBOX ? 'https://www.instagram.com/' : u);
+    const e = new EngineWindow({ sleep: instant });
+    await e.start();
+    await vi.waitFor(() => expect(e.state).toBe('needsUser'));
+    const loads = win().webContents.loads.length;
+    const spy = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 70_000);
+    h.state.cookies = [{}];
+    await nav('https://www.instagram.com/explore/');
+    await nav('https://www.instagram.com/');
+    spy.mockRestore();
+    expect(win().webContents.loads).toHaveLength(loads);
+  });
+});
+
+describe('EngineWindow guards', () => {
+  const event = () => ({ preventDefault: vi.fn() });
+
+  it('blocks navigation to foreign hosts and opens https ones externally', async () => {
+    await readyEngine();
+    const ev = event();
+    win().webContents.emit('will-navigate', ev, 'https://evil.example/x');
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(h.state.opened).toEqual(['https://evil.example/x']);
+    const ok = event();
+    win().webContents.emit('will-navigate', ok, 'https://www.instagram.com/direct/t/1/');
+    expect(ok.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it('cancels foreign redirects without opening them', async () => {
+    await readyEngine();
+    const ev = event();
+    win().webContents.emit('will-redirect', ev, 'https://evil.example/x');
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(h.state.opened).toEqual([]);
+  });
+
+  it('recovers when the debugger detaches', async () => {
+    const e = await readyEngine();
+    win().webContents.debugger.emit('detach');
+    expect(e.state).toBe('broken');
+    expect(() => e.cdp).toThrow();
+    e.stop();
+  });
+
+  it('gives an unresponsive page time to come back before recovering', async () => {
+    const e = await readyEngine();
+    vi.useFakeTimers();
+    try {
+      win().webContents.emit('unresponsive');
+      win().webContents.emit('responsive');
+      vi.advanceTimersByTime(11_000);
+      expect(e.state).toBe('ready');
+      win().webContents.emit('unresponsive');
+      vi.advanceTimersByTime(11_000);
+      expect(e.state).toBe('broken');
+    } finally {
+      e.stop();
+      vi.useRealTimers();
+    }
   });
 });

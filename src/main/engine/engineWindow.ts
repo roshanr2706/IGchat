@@ -47,6 +47,12 @@ export class EngineWindow implements EngineLike {
   private unresponsive: ReturnType<typeof setTimeout> | null = null;
   private starting: Promise<void> | null = null;
   private redirecting = false;
+  /** Set once the user has been (or must be) given the window; no automatic redirects until a ready page clears it. */
+  private handedOver = false;
+  /** Set when redirect recovery gave up; even the post-login bounce stays off until a ready page. */
+  private gaveUp = false;
+  private curUrl = '';
+  private prevUrl = '';
   private readonly redirects = new RedirectPolicy();
 
   constructor(private readonly opts: EngineOptions = {}) {}
@@ -99,7 +105,10 @@ export class EngineWindow implements EngineLike {
       if (/^https:\/\//i.test(url)) void shell.openExternal(url);
     };
     wc.on('will-navigate', guard);
-    wc.on('will-redirect', guard);
+    // Redirects are only cancelled; the user didn't click anything, so nothing is opened externally.
+    wc.on('will-redirect', (event, url) => {
+      if (!isAllowedNavigation(url)) event.preventDefault();
+    });
     wc.on('did-navigate', () => this.onUrl());
     wc.on('did-navigate-in-page', () => this.onUrl());
     wc.on('did-finish-load', () => {
@@ -167,9 +176,10 @@ export class EngineWindow implements EngineLike {
     await this.sleep(800);
     if (!(await setFileOnPageInput(this.cdp, filePath))) throw new ServiceError('Unknown', "Couldn't find Instagram's attach button");
     await this.sleep(1200);
-    // Some Instagram versions send on selection; others show a preview with a Send button.
-    const sent = await this.page.evaluate<boolean>(CLICK_SEND_SCRIPT).catch(() => false);
-    if (!sent) throw new ServiceError('Unknown', "Couldn't find Instagram's send button");
+    // The file is handed over: from here nothing may throw a retryable error, or the caller would send the image twice.
+    // Some Instagram versions send on selection; others show a preview with a Send button. If we can't click one,
+    // the caller waits for the echo to decide whether the image went out.
+    await this.page.evaluate<boolean>(CLICK_SEND_SCRIPT).catch(() => false);
   }
 
   async isLoggedIn(): Promise<boolean> {
@@ -198,28 +208,48 @@ export class EngineWindow implements EngineLike {
 
   private onUrl(): void {
     if (!this.win) return;
-    const { kind, reason } = classifyEngineUrl(this.page.url());
+    const url = this.page.url();
+    if (url !== this.curUrl) {
+      this.prevUrl = this.curUrl;
+      this.curUrl = url;
+    }
+    const { kind, reason } = classifyEngineUrl(url);
     if (kind === 'ready') {
       this.failures = 0;
       this.redirects.reset();
+      this.handedOver = false;
+      this.gaveUp = false;
       if (this.win.isVisible()) this.win.hide();
       this.setState('ready');
     } else if (kind === 'needsUser') {
+      this.handedOver = true;
       this.needsUserReason = reason ?? 'login';
       this.setState('needsUser');
       this.showForUser();
-    } else if (this.state === 'needsUser') {
+    } else if (this.handedOver) {
       // The user is mid-flow (password reset, "log in with Facebook"): leave navigation alone.
-      // Only once the session cookie exists is a stray Instagram page worth sending back to the inbox.
-      if (kind === 'goInbox') {
+      // The one exception is the page Instagram lands on right after a successful login.
+      if (kind === 'goInbox' && !this.gaveUp && this.isPostLoginLanding(url)) {
         void this.isLoggedIn()
           .then((ok) => {
-            if (ok) this.redirectToInbox();
+            if (ok && this.handedOver && !this.gaveUp) this.redirectToInbox();
           })
           .catch(() => {});
       }
     } else if (kind === 'goInbox' || kind === 'foreign') {
       this.redirectToInbox();
+    }
+  }
+
+  /** The site root (any query), or an ordinary page reached straight from the login page. */
+  private isPostLoginLanding(url: string): boolean {
+    try {
+      const path = new URL(url).pathname;
+      if (path === '/') return true;
+      if (path.startsWith('/accounts/')) return false;
+      return new URL(this.prevUrl).pathname.startsWith('/accounts/login');
+    } catch {
+      return false;
     }
   }
 
@@ -229,6 +259,8 @@ export class EngineWindow implements EngineLike {
     if (!win || this.redirecting) return;
     const decision = this.redirects.record();
     if (decision.action === 'giveUp') {
+      this.handedOver = true;
+      this.gaveUp = true;
       this.needsUserReason = 'challenge';
       this.setState('needsUser');
       this.showForUser();
@@ -275,6 +307,7 @@ export class EngineWindow implements EngineLike {
     this.win = null;
     this.cdpSession = null;
     this.redirecting = false;
+    this.clearUnresponsive();
     if (!win || win.isDestroyed()) return;
     try {
       win.webContents.debugger.detach();

@@ -38,9 +38,9 @@ export function clickThreadLinkScript(threadId: string): string {
 
 /**
  * Clicks Instagram's Send control if one is showing (used after attaching an image). Language-independent first:
- * the submit control in the form around the attach input. Falls back to a control labelled "send".
+ * the submit control in the form around the last attach input (the one setFileOnPageInput fills). Falls back to a control labelled "send".
  */
-export const CLICK_SEND_SCRIPT = `(() => { const input = document.querySelector('input[type="file"]'); const form = input && input.closest('form'); const submit = form && form.querySelector('button[type="submit"], [role="button"][type="submit"], input[type="submit"]'); if (submit) { submit.click(); return true; } const els = Array.from(document.querySelectorAll('[role="button"], button')); const send = els.find((el) => (el.getAttribute('aria-label') || '').trim().toLowerCase() === 'send' || (el.textContent || '').trim().toLowerCase() === 'send'); if (!send) return false; send.click(); return true; })()`;
+export const CLICK_SEND_SCRIPT = `(() => { const inputs = document.querySelectorAll('input[type="file"]'); const input = inputs[inputs.length - 1]; const form = input && input.closest('form'); const submit = form && form.querySelector('button[type="submit"], [role="button"][type="submit"], input[type="submit"]'); if (submit) { submit.click(); return true; } const els = Array.from(document.querySelectorAll('[role="button"], button')); const send = els.find((el) => (el.getAttribute('aria-label') || '').trim().toLowerCase() === 'send' || (el.textContent || '').trim().toLowerCase() === 'send'); if (!send) return false; send.click(); return true; })()`;
 
 /** Gives a local file to the page's own attach input, exactly as a user's file picker would. */
 export async function setFileOnPageInput(cdp: CdpLike, filePath: string): Promise<boolean> {
