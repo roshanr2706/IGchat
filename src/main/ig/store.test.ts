@@ -185,19 +185,33 @@ describe('IgStore messages', () => {
     expect(news).toHaveBeenCalledTimes(1);
   });
 
-  it('replays orphans silently for a silent ingestThreads, and clear() empties the buffer', () => {
+  it('replays each orphan as loudly as it arrived, whatever the thread ingest, and clear() empties the buffer', () => {
     const fresh = new IgStore();
     const news = vi.fn();
     fresh.events.on('msg:new', news);
     fresh.ingestMessages([node('mid.$m1')]);
+    fresh.ingestMessages([node('mid.$m2')], { silent: true });
     fresh.ingestThreads(threadNodes, { silent: true });
-    expect(news).not.toHaveBeenCalled();
+    expect(news).toHaveBeenCalledTimes(1);
+    expect(news.mock.calls[0]![1].map((m: { id: string }) => m.id)).toEqual(['mid.$m1']);
     expect(fresh.find(T1, 'mid.$m1')).toBeDefined();
+    expect(fresh.find(T1, 'mid.$m2')).toBeDefined();
     const other = new IgStore();
     other.ingestMessages([node('mid.$m1')]);
     other.clear();
     other.ingestThreads(threadNodes, { silent: true });
     expect(other.find(T1, 'mid.$m1')).toBeUndefined();
+  });
+
+  it('keeps one parked copy of a repeated orphan record', () => {
+    const fresh = new IgStore();
+    const news = vi.fn();
+    fresh.events.on('msg:new', news);
+    for (let i = 0; i < 600; i++) fresh.ingestMessages([node('mid.$m1')]);
+    fresh.ingestMessages([node('mid.$m2')]);
+    fresh.ingestThreads(threadNodes);
+    expect(news).toHaveBeenCalledTimes(1);
+    expect(news.mock.calls[0]![1].map((m: { id: string }) => m.id).sort()).toEqual(['mid.$m1', 'mid.$m2']);
   });
 
   it('caps the orphan buffer at 500, dropping the oldest', () => {

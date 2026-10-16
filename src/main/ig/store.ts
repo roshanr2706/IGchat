@@ -27,7 +27,7 @@ export class IgStore {
   private readonly messagesByThread = new Map<string, Map<string, Message>>();
   private readonly itemIndex = new Map<string, { threadId: string; messageId: string }>();
   private readonly itemIdByMessage = new Map<string, string>();
-  private orphans: { fbid: string; raw: unknown }[] = [];
+  private orphans: { fbid: string; key: string; raw: unknown; silent: boolean }[] = [];
   private readonly recentlyRemoved = new Set<string>();
   private readonly pendingByOtid = new Map<string, string>();
 
@@ -77,7 +77,7 @@ export class IgStore {
       if (!prev || JSON.stringify(prev.thread) !== JSON.stringify(n.thread)) changed.push(n.thread);
     }
     if (changed.length && !opts.silent) this.events.emit('inbox:updated', changed);
-    this.replayOrphans(opts.silent);
+    this.replayOrphans();
     return all;
   }
 
@@ -93,7 +93,10 @@ export class IgStore {
           this.threadIdByFbid.set(threadFbid, opts.threadId);
           threadId = opts.threadId;
         } else {
-          this.orphans.push({ fbid: threadFbid, raw });
+          // Park until the thread is known; a repeat of the same record replaces the parked copy.
+          const key = `${threadFbid}/${field(raw, 'message_id') ?? ''}`;
+          this.orphans = this.orphans.filter((o) => o.key !== key);
+          this.orphans.push({ fbid: threadFbid, key, raw, silent: !!opts.silent });
           if (this.orphans.length > MAX_ORPHANS) this.orphans.shift();
           continue;
         }
@@ -136,12 +139,16 @@ export class IgStore {
     return result;
   }
 
-  private replayOrphans(silent?: boolean): void {
+  /** Replays parked records whose thread is now known, each as loudly as it originally arrived. */
+  private replayOrphans(): void {
     if (!this.orphans.length) return;
     const ready = this.orphans.filter((o) => this.threadIdByFbid.has(o.fbid));
     if (!ready.length) return;
     this.orphans = this.orphans.filter((o) => !this.threadIdByFbid.has(o.fbid));
-    this.ingestMessages(ready.map((o) => o.raw), { silent });
+    const loud = ready.filter((o) => !o.silent).map((o) => o.raw);
+    const quiet = ready.filter((o) => o.silent).map((o) => o.raw);
+    if (quiet.length) this.ingestMessages(quiet, { silent: true });
+    if (loud.length) this.ingestMessages(loud);
   }
 
   upsertOwn(message: Message): void {
