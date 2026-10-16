@@ -55,6 +55,8 @@ export class EngineWindow implements EngineLike {
   private followingLink = false;
   /** Hard ceiling on automatic inbox reloads that no navigation can reset: only an explicit start() or logout() does. */
   private readonly bounceCap = new RedirectPolicy(6, 10 * 60_000);
+  /** Separate budget for failed person-open hops: spending it never hands the window to the user. */
+  private readonly personOpenBudget = new RedirectPolicy(5, 10 * 60_000);
   private readyTimer: ReturnType<typeof setTimeout> | null = null;
   /** Set once the user has been (or must be) given the window; no automatic redirects until a ready page clears it. */
   private handedOver = false;
@@ -198,9 +200,13 @@ export class EngineWindow implements EngineLike {
    * Follows Instagram's own ig.me link for a username (as a browser click would) and returns the DM thread id it lands
    * on. Returns null for an invalid username, a page that is not ready, or when the thread isn't reached in time.
    */
+  canOpenUserThread(): boolean {
+    return !this.personOpenBudget.exhausted();
+  }
+
   async openUserThread(username: string): Promise<string | null> {
     const win = this.win;
-    if (!win || this.state !== 'ready' || !USERNAME_RE.test(username) || this.followingLink) return null;
+    if (!win || this.state !== 'ready' || !USERNAME_RE.test(username) || this.followingLink || !this.canOpenUserThread()) return null;
     this.followingLink = true;
     const before = this.page.url();
     let ok = false;
@@ -246,19 +252,23 @@ export class EngineWindow implements EngineLike {
           this.onUrl();
         } else if ((this.state as EngineState) !== 'needsUser') {
           await this.recoverFromFailedHop(win);
+          // Look at where recovery left the page once; from here the normal capped policy applies.
+          this.followingLink = false;
+          if (this.win === win) this.onUrl();
         }
       }
       this.followingLink = false;
     }
   }
 
-  /** A hop that went nowhere: one explicit, bounded load of the inbox. It counts against the hard cap but never escalates to a hand-over loop. */
+  /** A hop that went nowhere: one explicit load of the inbox, capped at 12 s. It spends only the person-open budget and never hands over. */
   private async recoverFromFailedHop(win: BrowserWindow): Promise<void> {
-    if (this.bounceCap.record().action === 'giveUp') {
-      this.handOver();
-      return;
-    }
-    await win.webContents.loadURL(ENGINE_START_URL).catch(() => {});
+    this.personOpenBudget.record();
+    let cap: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      win.webContents.loadURL(ENGINE_START_URL).catch(() => {}),
+      new Promise<void>((resolve) => (cap = setTimeout(resolve, USER_THREAD_TIMEOUT_MS)))
+    ]).finally(() => clearTimeout(cap));
   }
 
   async attachImage(threadId: string, filePath: string): Promise<void> {

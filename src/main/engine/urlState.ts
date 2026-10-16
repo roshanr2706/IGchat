@@ -52,6 +52,12 @@ export class RedirectPolicy {
     return { action: 'reload', delayMs: 1000 * 2 ** (this.stamps.length - 1) };
   }
 
+  /** Whether the budget is spent right now (nothing is recorded). */
+  exhausted(): boolean {
+    const t = this.now();
+    return this.stamps.filter((s) => t - s < this.windowMs).length >= this.max;
+  }
+
   reset(): void {
     this.stamps = [];
   }

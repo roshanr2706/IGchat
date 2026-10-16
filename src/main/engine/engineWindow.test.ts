@@ -260,7 +260,7 @@ describe('EngineWindow opening a DM by username', () => {
     const e = await readyEngine();
     const wc = win().webContents;
     wc.loads.length = 0;
-    wc.nextUrl = () => 'https://www.instagram.com/';
+    wc.nextUrl = (u) => (u === INBOX ? INBOX : 'https://www.instagram.com/');
     await expect(e.openUserThread('alex')).resolves.toBeNull();
     // Exactly one explicit recovery load; the window stays hidden and the engine stays ready.
     expect(wc.loads).toEqual(['https://ig.me/m/alex', INBOX]);
@@ -268,6 +268,19 @@ describe('EngineWindow opening a DM by username', () => {
     expect(e.state).toBe('ready');
     await flush();
     expect(wc.loads).toHaveLength(2);
+  });
+
+  it('refuses without hopping once the person-open budget is spent, and never hands over', async () => {
+    const e = await readyEngine();
+    const wc = win().webContents;
+    wc.nextUrl = (u) => (u === INBOX ? INBOX : 'https://www.instagram.com/');
+    for (let i = 0; i < 5; i++) await expect(e.openUserThread('alex')).resolves.toBeNull();
+    expect(e.canOpenUserThread()).toBe(false);
+    wc.loads.length = 0;
+    await expect(e.openUserThread('alex')).resolves.toBeNull();
+    expect(wc.loads).toEqual([]);
+    expect(win().shown).toBe(0);
+    expect(e.state).toBe('ready');
   });
 
   it('recovers by loading the inbox when the hop lands on ig.me itself', async () => {

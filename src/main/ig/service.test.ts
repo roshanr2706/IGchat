@@ -44,6 +44,10 @@ class FakeEngine implements EngineLike {
     this.navigated.push(id);
   }
   userThreads: Record<string, string> = {};
+  canOpen = true;
+  canOpenUserThread(): boolean {
+    return this.canOpen;
+  }
   opened: string[] = [];
   async openUserThread(username: string): Promise<string | null> {
     this.opened.push(username);
@@ -735,6 +739,14 @@ describe('IgChatService people search', () => {
     finish('1000000000000077');
     await opening;
     expect(svc.activeThread).toBe(T1);
+  });
+
+  it('refuses with RateLimited when the engine has spent its person-open budget', async () => {
+    exec.handlers[OPS.search] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend' }]);
+    await svc.searchPeople('new');
+    engine.canOpen = false;
+    await expect(svc.openThreadWithUser('9000000077')).rejects.toMatchObject({ code: 'RateLimited' });
+    expect(engine.opened).toEqual([]);
   });
 
   it('passes through AuthExpired from a login wall during the hop', async () => {

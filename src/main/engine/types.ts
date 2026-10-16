@@ -35,6 +35,8 @@ export interface EngineLike {
   navigateToThread(threadId: string): Promise<void>;
   /** Follows Instagram's own ig.me link for a username; resolves to the DM thread id it lands on, or null. */
   openUserThread(username: string): Promise<string | null>;
+  /** False while too many person-open hops failed recently; openUserThread then refuses without hopping. */
+  canOpenUserThread(): boolean;
   attachImage(threadId: string, filePath: string): Promise<void>;
   isLoggedIn(): Promise<boolean>;
 }

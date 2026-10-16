@@ -113,7 +113,7 @@
       onkeydown={onKeydown}
       placeholder="Where would you like to go?"
       aria-label="Search conversations"
-      aria-controls="switcher-results"
+      aria-controls="switcher-results switcher-people"
       aria-activedescendant={activeOption}
     />
     {#if results.length}
@@ -140,7 +140,7 @@
       <p class="none" role="status">People search unavailable</p>
     {/if}
     {#if newPeople.length}
-      <ul role="listbox" aria-label="People">
+      <ul id="switcher-people" role="listbox" aria-label="People">
         {#each newPeople as p, j (p.id)}
           <li id="sw-p-{p.id}" role="option" aria-selected={results.length + j === sel}>
             <button class="person" class:selected={results.length + j === sel} tabindex="-1" onmouseenter={() => (index = results.length + j)} onclick={() => void choosePerson(p.id)}>

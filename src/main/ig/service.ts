@@ -352,6 +352,7 @@ export class IgChatService implements ChatService {
     const known = this.store.dmThreadWith(user.id);
     if (known) return known;
     await this.ready();
+    if (!this.deps.engine.canOpenUserThread()) throw new ServiceError('RateLimited', 'Too many chats opened by name. Try again in a few minutes');
     const threadId = await this.deps.engine.openUserThread(user.username);
     if (!threadId) throw new ServiceError('Unknown', `Couldn't open a chat with @${user.username}`);
     // The relay may deliver the real record under the id the page used or one we can match by person.
