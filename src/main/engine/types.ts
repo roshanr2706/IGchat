@@ -1,3 +1,4 @@
+import type { EngineState } from '../../shared/types';
 /** The parts of a Chrome DevTools Protocol session the engine uses (webContents.debugger in production). */
 export interface CdpLike {
   send<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
@@ -21,3 +22,17 @@ export type GraphQLObservation = { name: string; docId: string; variables: unkno
 export type RelayDelta = { threads: unknown[]; messages: unknown[]; removed: string[] };
 
 export type RelaySnapshot = RelayDelta & { viewer: unknown; inbox: { endCursor: string | null; hasMore: boolean } };
+
+/** What the Instagram service needs from the engine window (EngineWindow in production, a fake in tests). */
+export interface EngineLike {
+  readonly state: EngineState;
+  readonly needsUserReason: 'login' | 'challenge';
+  readonly events: { on(event: 'state', listener: (s: EngineState) => void): () => void };
+  start(): Promise<void>;
+  stop(): void;
+  showForUser(): void;
+  logout(): Promise<void>;
+  navigateToThread(threadId: string): Promise<void>;
+  attachImage(threadId: string, filePath: string): Promise<void>;
+  isLoggedIn(): Promise<boolean>;
+}
