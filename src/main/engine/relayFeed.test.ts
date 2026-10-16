@@ -325,6 +325,34 @@ describe('relay bridge hardening', () => {
     expect(feed.status).toBe('live');
   });
 
+  it('detach during an in-flight already-reinstall removes the existing bridge', async () => {
+    const original = store.notify;
+    const feed = feedOf();
+    await feed.install();
+    expect(store.notify).not.toBe(original);
+    let release: () => void = () => {};
+    let first = true;
+    page.handler = (script) => {
+      const result = (0, eval)(script); // 'already' for the install attempt
+      if (first) {
+        first = false;
+        return new Promise((r) => (release = () => r(result)));
+      }
+      return result;
+    };
+    const again = feed.install();
+    await flush();
+    feed.detach();
+    await flush();
+    expect(w.__igchatRelay).toBeUndefined();
+    expect(store.notify).toBe(original);
+    release();
+    await again;
+    await flush();
+    expect(w.__igchatRelay).toBeUndefined();
+    expect(feed.status).toBe('pending');
+  });
+
   it('commits earlier chunks and resends the rest when the binding throws partway', async () => {
     vi.useFakeTimers();
     const feed = feedOf();

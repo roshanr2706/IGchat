@@ -53,8 +53,6 @@ export class RelayFeed {
   dropped = 0;
   private generation = 0;
   private tokenSeq = 0;
-  /** Token of the bridge this feed installed (or adopted); only that bridge may be uninstalled. */
-  private token: string | null = null;
   private off: (() => void) | null = null;
   private installing: Promise<RelayStatus> | null = null;
 
@@ -100,7 +98,6 @@ export class RelayFeed {
     for (let attempt = 0; attempt < retries; attempt++) {
       if (gen !== this.generation) return this.status;
       let result: unknown;
-      this.token = token;
       try {
         result = await this.page.evaluate(`${BRIDGE_SOURCE}(${JSON.stringify(RELAY_BINDING)}, ${JSON.stringify(token)})`);
       } catch {
@@ -112,10 +109,6 @@ export class RelayFeed {
         return this.status;
       }
       if (result === 'live') this.dropped = 0;
-      if (result === 'already') {
-        this.token = await this.pageToken();
-        if (gen !== this.generation) return this.status;
-      }
       if (result === 'live' || result === 'already') {
         this.setStatus('live');
         return 'live';
@@ -136,7 +129,7 @@ export class RelayFeed {
         this.setStatus('unavailable');
         return null;
       }
-      // Too large or invalid: no snapshot, but the live feed itself is unaffected.
+      // Too large, page-side error or invalid: no snapshot, but the live feed itself is unaffected.
       if ((JSON.stringify(raw)?.length ?? 0) > MAX_RELAY_PAYLOAD) return null;
       return parseRelaySnapshot(raw);
     } catch {
@@ -149,29 +142,18 @@ export class RelayFeed {
     this.off = null;
     this.generation++;
     this.installing = null;
-    this.uninstallInPage(this.token);
-    this.token = null;
+    this.uninstallInPage(null);
     this.setStatus('pending');
   }
 
   /** Best effort: restores the page's original notify and stops its timers. */
+  /** With a token: removes only that install (stale attempts). With null: removes whatever bridge is present (detach). */
   private uninstallInPage(token: string | null): void {
-    if (!token) return;
     try {
       const script = `window.__igchatRelay && window.__igchatRelay.uninstall && window.__igchatRelay.uninstall(${JSON.stringify(token)})`;
       void Promise.resolve(this.page.evaluate(script)).catch(() => {});
     } catch {
       // ignore
-    }
-  }
-
-  /** Token of the bridge currently in the page, so an existing install can be adopted. */
-  private async pageToken(): Promise<string | null> {
-    try {
-      const t = await this.page.evaluate('window.__igchatRelay ? window.__igchatRelay.token : null');
-      return typeof t === 'string' ? t : null;
-    } catch {
-      return null;
     }
   }
 

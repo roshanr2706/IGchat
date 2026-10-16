@@ -226,12 +226,18 @@
         for (var i = 0; i < d.changed.length; i++) (d.changed[i].kind === 'm' ? records.messages : records.threads).push(d.changed[i].value);
         var snap = { threads: records.threads, messages: records.messages, removed: d.removed, viewer: viewer(), inbox: inbox() };
         // Measure here so oversized data never crosses CDP.
-        var size = JSON.stringify(snap).length;
+        var size;
+        try {
+          size = JSON.stringify(snap).length;
+        } catch (e) {
+          return { error: true };
+        }
         return size > MAX_PAYLOAD ? { tooLarge: true } : snap;
       },
       // A no-op unless the token matches, so a stale install can never remove a newer bridge.
       uninstall: function (t) {
-        if (t !== token) return;
+        // A token scopes the call to one install; no token (the host detaching) removes whatever is present.
+        if (t !== undefined && t !== null && t !== token) return;
         active = false;
         if (timer) clearTimeout(timer);
         timer = null;
