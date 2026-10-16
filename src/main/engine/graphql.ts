@@ -49,35 +49,47 @@ export function buildGraphQLRequest(
   };
 }
 
-/** Parses a GraphQL response body; Instagram may prefix `for (;;);` and stream several JSON lines. Throws when none parse. */
+/**
+ * Parses a GraphQL response body; Instagram may prefix `for (;;);` and stream several JSON lines.
+ * Prefers the chunk carrying `data`/`errors` over label/extension chunks. Throws when none parse.
+ */
 export function parseGraphQLText(text: string): Record<string, unknown> {
-  const body = text.replace(/^for \(;;\);/, '');
-  for (const line of body.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith('{')) continue;
+  const body = text.replace(/^\s*(for \(;;\);)?/, '');
+  const candidates: Record<string, unknown>[] = [];
+  const add = (raw: string): void => {
     try {
-      const parsed: unknown = JSON.parse(trimmed);
-      if (parsed && typeof parsed === 'object') return parsed as Record<string, unknown>;
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) candidates.push(parsed as Record<string, unknown>);
     } catch {
-      // try the next line
+      // not JSON on its own
     }
-  }
-  throw new Error('Unparseable GraphQL response');
+  };
+  add(body.trim());
+  if (!candidates.length) for (const line of body.split('\n')) if (line.trim().startsWith('{')) add(line.trim());
+  const best = candidates.find((c) => 'data' in c || 'errors' in c) ?? candidates[0];
+  if (!best) throw new Error('Unparseable GraphQL response');
+  return best;
+}
+
+function classifyText(text: string): ErrorCode | null {
+  if (text.includes('checkpoint') || text.includes('challenge')) return 'Checkpoint';
+  if (text.includes('log in') || text.includes('login')) return 'AuthExpired';
+  if (text.includes('rate') && text.includes('limit')) return 'RateLimited';
+  return null;
 }
 
 export function classifyGraphQLFailure(status: number, finalUrl: string, json: Record<string, unknown> | null): ErrorCode | null {
-  if (/\/accounts\/login/.test(finalUrl) || status === 401 || status === 403) return 'AuthExpired';
   if (/\/challenge\//.test(finalUrl)) return 'Checkpoint';
+  if (/\/accounts\/login/.test(finalUrl)) return 'AuthExpired';
   if (status === 429) return 'RateLimited';
   if (status >= 500 || status === 0) return 'Network';
-  if (status >= 400) return 'Unknown';
-  const errors = Array.isArray(json?.errors) ? (json!.errors as unknown[]) : [];
-  if (errors.length && !json?.data) {
-    const text = JSON.stringify(errors).toLowerCase();
-    if (text.includes('log in') || text.includes('login')) return 'AuthExpired';
-    if (text.includes('checkpoint') || text.includes('challenge')) return 'Checkpoint';
-    if (text.includes('rate') && text.includes('limit')) return 'RateLimited';
-    return 'Unknown';
+  if (status >= 400) {
+    // Instagram reports checkpoints and logouts as 400/403 with a JSON `message` (e.g. checkpoint_required).
+    const fromBody = json ? classifyText(JSON.stringify({ message: json.message, errors: json.errors }).toLowerCase()) : null;
+    if (fromBody) return fromBody;
+    return status === 401 || status === 403 ? 'AuthExpired' : 'Unknown';
   }
+  const errors = Array.isArray(json?.errors) ? (json!.errors as unknown[]) : [];
+  if (errors.length && !json?.data) return classifyText(JSON.stringify(errors).toLowerCase()) ?? 'Unknown';
   return null;
 }

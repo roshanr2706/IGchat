@@ -42,6 +42,19 @@ describe('graphql responses', () => {
     expect(parseGraphQLText('for (;;);{"data":{"a":2}}')).toEqual({ data: { a: 2 } });
     expect(parseGraphQLText('{"data":{"a":3}}\n{"label":"x","data":{}}')).toEqual({ data: { a: 3 } });
     expect(() => parseGraphQLText('<html>')).toThrow();
+    expect(parseGraphQLText(String.fromCharCode(0xfeff) + '\nfor (;;);{"data":{"a":4}}')).toEqual({ data: { a: 4 } });
+    expect(parseGraphQLText('{\n  "data": {"a": 5}\n}')).toEqual({ data: { a: 5 } });
+    expect(parseGraphQLText('{"label":"x"}\n{"data":{"a":6}}')).toEqual({ data: { a: 6 } });
+  });
+  it('classifies challenges, body-reported failures and partial data', () => {
+    const url = 'https://www.instagram.com/api/graphql';
+    expect(classifyGraphQLFailure(403, 'https://www.instagram.com/challenge/abc/', null)).toBe('Checkpoint');
+    expect(classifyGraphQLFailure(400, url, { message: 'checkpoint_required' })).toBe('Checkpoint');
+    expect(classifyGraphQLFailure(400, url, { message: 'login_required' })).toBe('AuthExpired');
+    expect(classifyGraphQLFailure(403, url, null)).toBe('AuthExpired');
+    expect(classifyGraphQLFailure(404, url, null)).toBe('Unknown');
+    expect(classifyGraphQLFailure(0, url, null)).toBe('Network');
+    expect(classifyGraphQLFailure(200, url, { data: { a: 1 }, errors: [{ message: 'partial' }] })).toBeNull();
   });
 
   it('classifies failures', () => {
