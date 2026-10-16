@@ -3,10 +3,12 @@ import type { DocIdRegistry } from './docIds';
 import { envelopeFromRequest, GRAPHQL_PATH, parseForm, parseGraphQLText } from './graphql';
 import type { CdpLike, Envelope, GraphQLObservation } from './types';
 
-/** `"<Name>_instagramRelayOperation" … exports="<doc_id>"` inside Instagram's JS bundles. */
-export const RELAY_OP_RE = /"(\w+)_instagramRelayOperation"[^]{0,200}?exports="(\d+)"/g;
+/** `"<Name>_instagramRelayOperation" … exports="<doc_id>"` inside Instagram's JS bundles (never crossing into another `__d(` module). */
+export const RELAY_OP_RE = /"(\w+)_instagramRelayOperation"(?:(?!__d\()[^]){0,200}?exports="(\d+)"/g;
 /** Sockets whose traffic means "a message may have arrived" (used only by the fallback doorbell). */
 export const MESSAGING_SOCKET_RE = /^wss:\/\/(gateway\.instagram\.com\/ws\/(lightspeed|realtime)|edge-chat\.instagram\.com\/chat)/;
+/** Upper bound on requests awaiting their response; the oldest is dropped beyond it. */
+export const MAX_PENDING = 500;
 
 export type TapEvents = {
   observation: (o: GraphQLObservation) => void;
@@ -18,9 +20,12 @@ export class Tap {
   readonly events = new Emitter<TapEvents>();
   envelope: Envelope | null = null;
   private readonly pending = new Map<string, { name: string; docId: string; variables: unknown }>();
+  private readonly requestReads = new Map<string, Promise<void>>();
   private readonly scripts = new Set<string>();
   private readonly sockets = new Map<string, string>();
   private off: (() => void) | null = null;
+  /** Bumped by start() and stop(); in-flight work from an older generation is discarded. */
+  private gen = 0;
 
   constructor(
     private readonly cdp: CdpLike,
@@ -28,17 +33,29 @@ export class Tap {
   ) {}
 
   async start(): Promise<void> {
-    this.off?.();
+    this.reset();
     this.off = this.cdp.onEvent((method, params) => {
       void this.handle(method, params).catch(() => {});
     });
-    await this.cdp.send('Network.enable', { maxPostDataSize: 2_000_000 });
+    try {
+      await this.cdp.send('Network.enable', { maxPostDataSize: 2_000_000 });
+    } catch (err) {
+      this.off?.();
+      this.off = null;
+      throw err;
+    }
   }
 
   stop(): void {
+    this.reset();
+  }
+
+  private reset(): void {
+    this.gen++;
     this.off?.();
     this.off = null;
     this.pending.clear();
+    this.requestReads.clear();
     this.scripts.clear();
     this.sockets.clear();
   }
@@ -48,7 +65,7 @@ export class Tap {
     switch (method) {
       case 'Network.requestWillBeSent': {
         const req = params?.request;
-        if (req?.method !== 'POST' || typeof req.postData !== 'string') return;
+        if (req?.method !== 'POST') return;
         let path = '';
         try {
           path = new URL(req.url).pathname;
@@ -56,19 +73,36 @@ export class Tap {
           return;
         }
         if (path !== GRAPHQL_PATH) return;
-        const form = parseForm(req.postData);
+        const gen = this.gen;
+        const id: string = params.requestId;
+        let postData: string | null = typeof req.postData === 'string' ? req.postData : null;
+        if (postData === null && req.hasPostData) {
+          const read = this.readPostData(id).then((d) => {
+            postData = d;
+          });
+          this.requestReads.set(id, read);
+          await read;
+          if (gen !== this.gen) return;
+          this.requestReads.delete(id);
+        }
+        if (postData === null) return;
+        const form = parseForm(postData);
         const name = form.fb_api_req_friendly_name;
         const docId = form.doc_id;
         if (!name || !docId) return;
         this.docIds.observe(name, docId);
-        this.envelope = envelopeFromRequest(req.postData, req.headers ?? {}) ?? this.envelope;
+        this.envelope = envelopeFromRequest(postData, req.headers ?? {}) ?? this.envelope;
         let variables: unknown = null;
         try {
           variables = JSON.parse(form.variables ?? 'null');
         } catch {
           variables = null;
         }
-        this.pending.set(params.requestId, { name, docId, variables });
+        this.pending.set(id, { name, docId, variables });
+        if (this.pending.size > MAX_PENDING) {
+          const oldest = this.pending.keys().next().value;
+          if (oldest !== undefined) this.pending.delete(oldest);
+        }
         return;
       }
       case 'Network.responseReceived':
@@ -76,16 +110,23 @@ export class Tap {
         return;
       case 'Network.loadingFinished': {
         const id: string = params?.requestId;
+        const gen = this.gen;
         if (this.scripts.delete(id)) {
           const text = await this.body(id);
+          if (gen !== this.gen) return;
           for (const m of text.matchAll(RELAY_OP_RE)) this.docIds.scrape(m[1]!, m[2]!);
           return;
+        }
+        const read = this.requestReads.get(id);
+        if (read) {
+          await read;
+          if (gen !== this.gen) return;
         }
         const p = this.pending.get(id);
         if (!p) return;
         this.pending.delete(id);
         const text = await this.body(id);
-        if (!text) return;
+        if (gen !== this.gen || !text) return;
         let json: Record<string, unknown>;
         try {
           json = parseGraphQLText(text);
@@ -97,6 +138,7 @@ export class Tap {
       }
       case 'Network.loadingFailed':
         this.pending.delete(params?.requestId);
+        this.requestReads.delete(params?.requestId);
         this.scripts.delete(params?.requestId);
         return;
       case 'Network.webSocketCreated':
@@ -118,9 +160,18 @@ export class Tap {
   private async body(requestId: string): Promise<string> {
     try {
       const r = await this.cdp.send<{ body: string; base64Encoded: boolean }>('Network.getResponseBody', { requestId });
-      return r.base64Encoded ? '' : r.body;
+      return r.base64Encoded ? Buffer.from(r.body, 'base64').toString('utf8') : r.body;
     } catch {
       return '';
+    }
+  }
+
+  private async readPostData(requestId: string): Promise<string | null> {
+    try {
+      const r = await this.cdp.send<{ postData?: string }>('Network.getRequestPostData', { requestId });
+      return typeof r?.postData === 'string' ? r.postData : null;
+    } catch {
+      return null;
     }
   }
 }
