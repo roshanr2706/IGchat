@@ -72,6 +72,8 @@ export class IgChatService implements ChatService {
   private readonly claimedImages = new Set<string>();
   private readonly deferred = new Set<() => void>();
   private readonly searches = new Map<string, Promise<User[]>>();
+  /** Bumped by every explicit thread selection; a slower person-open must not override a newer choice. */
+  private selectSeq = 0;
 
   constructor(private readonly deps: IgServiceDeps) {}
 
@@ -256,6 +258,7 @@ export class IgChatService implements ChatService {
   }
 
   async openThread(threadId: string): Promise<ThreadPage> {
+    this.selectSeq++;
     this.activeThreadId = threadId;
     await this.ready();
     // Navigation is best effort: if the page can't open the thread, the query fallback below still serves it.
@@ -308,7 +311,17 @@ export class IgChatService implements ChatService {
 
   private async runSearch(text: string): Promise<User[]> {
     await this.ready();
-    const users = extractSearchUsers(await this.deps.exec.run(OPS.search, searchVars(text)))
+    let data: unknown;
+    try {
+      data = await this.deps.exec.run(OPS.search, searchVars(text));
+    } catch (err) {
+      // exec reports an operation whose doc id was never seen or scraped this way.
+      if (err instanceof ServiceError && err.code === 'EngineNotReady' && /^Unknown Instagram operation/.test(err.message)) {
+        throw new ServiceError('EngineNotReady', "People search isn't available yet");
+      }
+      throw err;
+    }
+    const users = extractSearchUsers(data)
       .map((raw) => normalizeUser(raw)?.user)
       .filter((u): u is User => !!u && !!u.username);
     users.forEach((u) => this.store.rememberUser(u));
@@ -325,7 +338,8 @@ export class IgChatService implements ChatService {
     if (this.imageBusy > 0) throw new ServiceError('EngineNotReady', 'Instagram is busy right now, try again in a moment');
     // Held like an image send: later image sends queue behind this navigation and background navigation stays off.
     this.imageBusy++;
-    const run = this.imageQueue.then(() => this.openUserThreadNow(user));
+    const token = ++this.selectSeq;
+    const run = this.imageQueue.then(() => this.openUserThreadNow(user, token));
     this.imageQueue = run
       .then(() => {}, () => {})
       .then(() => {
@@ -334,7 +348,7 @@ export class IgChatService implements ChatService {
     return run;
   }
 
-  private async openUserThreadNow(user: User): Promise<Thread> {
+  private async openUserThreadNow(user: User, token: number): Promise<Thread> {
     const known = this.store.dmThreadWith(user.id);
     if (known) return known;
     await this.ready();
@@ -357,8 +371,10 @@ export class IgChatService implements ChatService {
         avatarUrls: user.avatarUrl ? [user.avatarUrl] : []
       });
     }
-    const thread = arrived()!;
-    this.activeThreadId = thread.id;
+    const thread = arrived();
+    if (!thread) throw new ServiceError('Unknown', `Couldn't open a chat with @${user.username}`);
+    // Only claim the active thread if the user hasn't picked something else in the meantime.
+    if (token === this.selectSeq) this.activeThreadId = thread.id;
     return thread;
   }
 
@@ -549,6 +565,7 @@ export class IgChatService implements ChatService {
   }
 
   setActiveThread(threadId: string | null): void {
+    this.selectSeq++;
     this.activeThreadId = threadId;
     if (threadId) this.navigate(threadId);
   }

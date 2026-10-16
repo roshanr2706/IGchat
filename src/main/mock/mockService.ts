@@ -19,6 +19,12 @@ export type MockOptions = {
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 /** In-memory fake backend used until the Instagram service (Plan 2) exists. Send a message containing "[fail]" to simulate a failure. */
+/** People who exist on "Instagram" but have no DM yet, so the Ctrl+K People flow can be tried in mock mode. */
+const FAKE_PEOPLE: User[] = [
+  { id: 'fake-jordan', username: 'jordan.lee', fullName: 'Jordan Lee', avatarUrl: '', verified: false },
+  { id: 'fake-priya', username: 'priya_n', fullName: 'Priya Nair', avatarUrl: '', verified: false }
+];
+
 export class MockChatService implements ChatService {
   private readonly events = new Emitter<EventMap>();
   private readonly now: () => number;
@@ -179,14 +185,32 @@ export class MockChatService implements ChatService {
     if (!q) return [];
     const users = new Map<string, User>();
     for (const t of this.threads.values()) for (const u of t.participants) users.set(u.id, u);
+    for (const u of FAKE_PEOPLE) users.set(u.id, u);
     return clone([...users.values()].filter((u) => u.username.toLowerCase().includes(q) || u.fullName.toLowerCase().includes(q)));
   }
 
   async openThreadWithUser(userId: string): Promise<Thread> {
     await this.delay();
     const t = [...this.threads.values()].find((x) => !x.isGroup && x.participants[0]?.id === userId);
-    if (!t) throw new ServiceError('NotFound', 'No conversation with that person');
-    return clone(t);
+    if (t) return clone(t);
+    const person = FAKE_PEOPLE.find((u) => u.id === userId);
+    if (!person) throw new ServiceError('NotFound', 'No conversation with that person');
+    const created: Thread = {
+      id: `t-${person.id}`,
+      title: person.fullName,
+      isGroup: false,
+      participants: [person],
+      adminIds: [],
+      lastActivityAt: this.now(),
+      lastMessagePreview: '',
+      unread: false,
+      muted: false,
+      avatarUrls: []
+    };
+    this.threads.set(created.id, created);
+    this.messages.set(created.id, []);
+    this.events.emit('inbox:updated', [clone(created)]);
+    return clone(created);
   }
 
   setActiveThread(_threadId: string | null): void {}

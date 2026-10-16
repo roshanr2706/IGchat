@@ -203,6 +203,7 @@ export class EngineWindow implements EngineLike {
     if (!win || this.state !== 'ready' || !USERNAME_RE.test(username) || this.followingLink) return null;
     this.followingLink = true;
     const before = this.page.url();
+    let ok = false;
     try {
       let loaded = true;
       // ig.me redirects to instagram.com (an allowed host), so the redirect guard lets it through. Bounded in case the load hangs.
@@ -223,15 +224,41 @@ export class EngineWindow implements EngineLike {
         const url = this.page.url();
         const id = threadIdFromUrl(url);
         // A failed load that left us on the thread we were already viewing is not an answer.
-        if (id && (loaded || url !== before)) return id;
+        if (id && (loaded || url !== before)) {
+          ok = true;
+          return id;
+        }
+        if (classifyEngineUrl(url).kind === 'needsUser') break;
         await this.sleep(250);
+      }
+      if (this.win !== win) return null;
+      if (classifyEngineUrl(this.page.url()).kind === 'needsUser') {
+        // A login wall or checkpoint on the hop: the normal handler hands the window to the user.
+        this.followingLink = false;
+        this.onUrl();
+        throw new ServiceError('AuthExpired', 'Log in to Instagram');
       }
       return null;
     } finally {
+      if (this.win === win) {
+        if (ok) {
+          this.followingLink = false;
+          this.onUrl();
+        } else if ((this.state as EngineState) !== 'needsUser') {
+          await this.recoverFromFailedHop(win);
+        }
+      }
       this.followingLink = false;
-      // Look at where we ended up; a failed hop is recovered by the normal (capped) redirect policy.
-      if (this.win === win) this.onUrl();
     }
+  }
+
+  /** A hop that went nowhere: one explicit, bounded load of the inbox. It counts against the hard cap but never escalates to a hand-over loop. */
+  private async recoverFromFailedHop(win: BrowserWindow): Promise<void> {
+    if (this.bounceCap.record().action === 'giveUp') {
+      this.handOver();
+      return;
+    }
+    await win.webContents.loadURL(ENGINE_START_URL).catch(() => {});
   }
 
   async attachImage(threadId: string, filePath: string): Promise<void> {

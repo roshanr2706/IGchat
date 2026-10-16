@@ -258,8 +258,38 @@ describe('EngineWindow opening a DM by username', () => {
     const idle = new EngineWindow({ sleep: instant });
     await expect(idle.openUserThread('alex')).resolves.toBeNull();
     const e = await readyEngine();
-    win().webContents.nextUrl = () => 'https://www.instagram.com/';
+    const wc = win().webContents;
+    wc.loads.length = 0;
+    wc.nextUrl = () => 'https://www.instagram.com/';
     await expect(e.openUserThread('alex')).resolves.toBeNull();
+    // Exactly one explicit recovery load; the window stays hidden and the engine stays ready.
+    expect(wc.loads).toEqual(['https://ig.me/m/alex', INBOX]);
+    expect(win().shown).toBe(0);
+    expect(e.state).toBe('ready');
+    await flush();
+    expect(wc.loads).toHaveLength(2);
+  });
+
+  it('recovers by loading the inbox when the hop lands on ig.me itself', async () => {
+    const e = await readyEngine();
+    const wc = win().webContents;
+    wc.loads.length = 0;
+    wc.nextUrl = (u) => (u === INBOX ? 'https://www.instagram.com/direct/inbox/' : u);
+    await expect(e.openUserThread('alex')).resolves.toBeNull();
+    expect(wc.loads).toEqual(['https://ig.me/m/alex', INBOX]);
+    expect(win().shown).toBe(0);
+    expect(e.state).toBe('ready');
+  });
+
+  it('hands over to the user and reports AuthExpired when the hop hits a login wall', async () => {
+    const e = await readyEngine();
+    const wc = win().webContents;
+    wc.loads.length = 0;
+    wc.nextUrl = () => 'https://www.instagram.com/accounts/login/';
+    await expect(e.openUserThread('alex')).rejects.toMatchObject({ code: 'AuthExpired' });
+    expect(e.state).toBe('needsUser');
+    expect(win().visible).toBe(true);
+    expect(wc.loads).toEqual(['https://ig.me/m/alex']);
   });
 
   it('does not mistake the thread it was already on for the result', async () => {

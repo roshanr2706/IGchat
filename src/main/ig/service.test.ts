@@ -712,4 +712,37 @@ describe('IgChatService people search', () => {
     expect(a).toEqual(b);
     expect(exec.calls.filter((c) => c.name === OPS.search)).toHaveLength(1);
   });
+  it('reports a distinct error when the search operation is not known yet', async () => {
+    exec.handlers[OPS.search] = () => {
+      throw new ServiceError('EngineNotReady', 'Unknown Instagram operation ' + OPS.search);
+    };
+    await expect(svc.searchPeople('alex')).rejects.toMatchObject({ code: 'EngineNotReady', message: "People search isn't available yet" });
+  });
+
+  it('a late person-open does not take over the active thread after a newer selection', async () => {
+    exec.handlers[OPS.search] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend' }]);
+    await svc.searchPeople('new');
+    let finish: (id: string) => void = () => {};
+    let started = false;
+    engine.openUserThread = () =>
+      new Promise<string | null>((r) => {
+        started = true;
+        finish = r;
+      });
+    const opening = svc.openThreadWithUser('9000000077');
+    await vi.waitFor(() => expect(started).toBe(true));
+    svc.setActiveThread(T1);
+    finish('1000000000000077');
+    await opening;
+    expect(svc.activeThread).toBe(T1);
+  });
+
+  it('passes through AuthExpired from a login wall during the hop', async () => {
+    exec.handlers[OPS.search] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend' }]);
+    await svc.searchPeople('new');
+    engine.openUserThread = async () => {
+      throw new ServiceError('AuthExpired', 'Log in to Instagram');
+    };
+    await expect(svc.openThreadWithUser('9000000077')).rejects.toMatchObject({ code: 'AuthExpired' });
+  });
 });
