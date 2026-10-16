@@ -2,12 +2,15 @@ import { BrowserWindow, session, shell, type Debugger } from 'electron';
 import type { EngineState } from '../../shared/types';
 import { ServiceError } from '../chatService';
 import { Emitter } from '../emitter';
-import { CLICK_SEND_SCRIPT, clickThreadLinkScript, setFileOnPageInput, threadPathFor } from './pageScripts';
+import { CLICK_SEND_SCRIPT, clickThreadLinkScript, pathMatchesThread, setFileOnPageInput, threadPathFor, waitForThreadUrl } from './pageScripts';
 import type { CdpLike, EngineLike, PageLike } from './types';
-import { classifyEngineUrl } from './urlState';
+import { classifyEngineUrl, isAllowedNavigation, RedirectPolicy } from './urlState';
 
 export const ENGINE_PARTITION = 'persist:ig';
 export const ENGINE_START_URL = 'https://www.instagram.com/direct/inbox/';
+
+const THREAD_NAV_TIMEOUT_MS = 8000;
+const RESPONSIVE_GRACE_MS = 10_000;
 
 export function cdpFromDebugger(dbg: Debugger): CdpLike {
   return {
@@ -29,6 +32,8 @@ export type EngineOptions = {
   sleep?: (ms: number) => Promise<void>;
 };
 
+const notRunning = (): ServiceError => new ServiceError('EngineNotReady', 'Instagram engine is not running');
+
 /** Hidden window running Instagram's own web app. Shown only when Instagram needs the user (login, checkpoints). */
 export class EngineWindow implements EngineLike {
   readonly events = new Emitter<EngineEvents>();
@@ -39,22 +44,35 @@ export class EngineWindow implements EngineLike {
   private failures = 0;
   private quitting = false;
   private recovering: ReturnType<typeof setTimeout> | null = null;
+  private unresponsive: ReturnType<typeof setTimeout> | null = null;
+  private starting: Promise<void> | null = null;
+  private redirecting = false;
+  private readonly redirects = new RedirectPolicy();
 
   constructor(private readonly opts: EngineOptions = {}) {}
 
   readonly page: PageLike = {
     url: () => this.win?.webContents.getURL() ?? '',
-    evaluate: <T>(script: string): Promise<T> =>
-      this.win ? (this.win.webContents.executeJavaScript(script, true) as Promise<T>) : Promise.reject(new ServiceError('EngineNotReady', 'Instagram engine is not running'))
+    // executeJavaScript awaits a returned promise and rejects if the page script throws.
+    evaluate: <T>(script: string): Promise<T> => (this.win ? (this.win.webContents.executeJavaScript(script, true) as Promise<T>) : Promise.reject(notRunning()))
   };
 
   get cdp(): CdpLike {
-    if (!this.cdpSession) throw new ServiceError('EngineNotReady', 'Instagram engine is not running');
+    if (!this.cdpSession) throw notRunning();
     return this.cdpSession;
   }
 
-  async start(): Promise<void> {
-    if (this.win) return;
+  start(): Promise<void> {
+    if (this.starting) return this.starting;
+    if (this.win) return Promise.resolve();
+    const p = this.doStart().finally(() => {
+      if (this.starting === p) this.starting = null;
+    });
+    this.starting = p;
+    return p;
+  }
+
+  private async doStart(): Promise<void> {
     this.quitting = false;
     const ses = session.fromPartition(ENGINE_PARTITION);
     ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
@@ -69,18 +87,41 @@ export class EngineWindow implements EngineLike {
     });
     this.win = win;
     const wc = win.webContents;
+    // Never open new windows; https links go to the user's browser.
     wc.setWindowOpenHandler(({ url }) => {
       if (/^https:\/\//i.test(url)) void shell.openExternal(url);
       return { action: 'deny' };
     });
+    // The window may only travel within Instagram and the Facebook/Meta hosts used for login and checkpoints.
+    const guard = (event: { preventDefault(): void }, url: string): void => {
+      if (isAllowedNavigation(url)) return;
+      event.preventDefault();
+      if (/^https:\/\//i.test(url)) void shell.openExternal(url);
+    };
+    wc.on('will-navigate', guard);
+    wc.on('will-redirect', guard);
     wc.on('did-navigate', () => this.onUrl());
     wc.on('did-navigate-in-page', () => this.onUrl());
     wc.on('did-finish-load', () => {
+      const url = this.page.url();
+      if (url === '' || url === 'about:blank') return;
       this.onUrl();
       this.events.emit('loaded');
     });
     wc.on('render-process-gone', () => this.recover());
-    wc.on('unresponsive', () => this.recover());
+    wc.on('unresponsive', () => {
+      if (this.unresponsive || this.quitting) return;
+      this.unresponsive = setTimeout(() => {
+        this.unresponsive = null;
+        this.recover();
+      }, RESPONSIVE_GRACE_MS);
+    });
+    wc.on('responsive', () => this.clearUnresponsive());
+    wc.debugger.on('detach', () => {
+      if (this.win !== win) return;
+      this.cdpSession = null;
+      if (!this.quitting) this.recover();
+    });
     // Closing the login window hides it; the engine keeps running.
     win.on('close', (event) => {
       if (!this.quitting) {
@@ -88,12 +129,20 @@ export class EngineWindow implements EngineLike {
         win.hide();
       }
     });
-    // CDP's Network.enable hangs on a never-navigated webContents, so attach on about:blank first.
-    await wc.loadURL('about:blank');
-    wc.debugger.attach('1.3');
-    this.cdpSession = cdpFromDebugger(wc.debugger);
-    await this.opts.beforeLoad?.(this.cdpSession, this.page);
-    await wc.loadURL(ENGINE_START_URL).catch(() => {});
+    try {
+      // CDP's Network.enable hangs on a never-navigated webContents, so attach on about:blank first.
+      await wc.loadURL('about:blank');
+      if (this.win !== win) throw notRunning();
+      wc.debugger.attach('1.3');
+      this.cdpSession = cdpFromDebugger(wc.debugger);
+      await this.opts.beforeLoad?.(this.cdpSession, this.page);
+      if (this.win !== win) throw notRunning();
+      await wc.loadURL(ENGINE_START_URL).catch(() => {});
+    } catch (err) {
+      // stop() during start() tears the window down under us; report that cleanly.
+      if (this.win !== win) throw notRunning();
+      throw err;
+    }
   }
 
   showForUser(): void {
@@ -103,17 +152,14 @@ export class EngineWindow implements EngineLike {
   }
 
   async navigateToThread(threadId: string): Promise<void> {
-    if (!this.win || this.state !== 'ready') return;
-    const path = threadPathFor(threadId);
-    let current = '';
-    try {
-      current = new URL(this.page.url()).pathname;
-    } catch {
-      current = '';
-    }
-    if (current === path) return;
+    const win = this.win;
+    if (!win || this.state !== 'ready') throw notRunning();
+    if (pathMatchesThread(this.page.url(), threadId)) return;
     const clicked = await this.page.evaluate<boolean>(clickThreadLinkScript(threadId)).catch(() => false);
-    if (!clicked) await this.win.webContents.loadURL(`https://www.instagram.com${path}`).catch(() => {});
+    if (!clicked) await win.webContents.loadURL(`https://www.instagram.com${threadPathFor(threadId)}`).catch(() => {});
+    if (!(await waitForThreadUrl(() => this.page.url(), threadId, (ms) => this.sleep(ms), THREAD_NAV_TIMEOUT_MS))) {
+      throw new ServiceError('Unknown', "Instagram didn't open the conversation");
+    }
   }
 
   async attachImage(threadId: string, filePath: string): Promise<void> {
@@ -122,7 +168,8 @@ export class EngineWindow implements EngineLike {
     if (!(await setFileOnPageInput(this.cdp, filePath))) throw new ServiceError('Unknown', "Couldn't find Instagram's attach button");
     await this.sleep(1200);
     // Some Instagram versions send on selection; others show a preview with a Send button.
-    await this.page.evaluate<boolean>(CLICK_SEND_SCRIPT).catch(() => false);
+    const sent = await this.page.evaluate<boolean>(CLICK_SEND_SCRIPT).catch(() => false);
+    if (!sent) throw new ServiceError('Unknown', "Couldn't find Instagram's send button");
   }
 
   async isLoggedIn(): Promise<boolean> {
@@ -134,14 +181,18 @@ export class EngineWindow implements EngineLike {
     const ses = session.fromPartition(ENGINE_PARTITION);
     await ses.clearStorageData();
     await ses.clearCache();
+    // A stopped engine has nothing to restart; don't announce a state change that isn't happening.
+    const win = this.win;
+    if (!win) return;
     this.setState('starting');
-    await this.win?.webContents.loadURL(ENGINE_START_URL).catch(() => {});
+    await win.webContents.loadURL(ENGINE_START_URL).catch(() => {});
   }
 
   stop(): void {
     this.quitting = true;
     if (this.recovering) clearTimeout(this.recovering);
     this.recovering = null;
+    this.clearUnresponsive();
     this.destroyWindow();
   }
 
@@ -150,16 +201,50 @@ export class EngineWindow implements EngineLike {
     const { kind, reason } = classifyEngineUrl(this.page.url());
     if (kind === 'ready') {
       this.failures = 0;
+      this.redirects.reset();
       if (this.win.isVisible()) this.win.hide();
       this.setState('ready');
     } else if (kind === 'needsUser') {
       this.needsUserReason = reason ?? 'login';
       this.setState('needsUser');
       this.showForUser();
-    } else if (kind === 'goInbox' || (kind === 'foreign' && this.state !== 'needsUser')) {
-      // "Log in with Facebook" may legitimately leave instagram.com while the user is logging in.
-      void this.win.webContents.loadURL(ENGINE_START_URL).catch(() => {});
+    } else if (this.state === 'needsUser') {
+      // The user is mid-flow (password reset, "log in with Facebook"): leave navigation alone.
+      // Only once the session cookie exists is a stray Instagram page worth sending back to the inbox.
+      if (kind === 'goInbox') {
+        void this.isLoggedIn()
+          .then((ok) => {
+            if (ok) this.redirectToInbox();
+          })
+          .catch(() => {});
+      }
+    } else if (kind === 'goInbox' || kind === 'foreign') {
+      this.redirectToInbox();
     }
+  }
+
+  /** Reloads the inbox with backoff; after repeated bounces hands the window to the user instead of looping. */
+  private redirectToInbox(): void {
+    const win = this.win;
+    if (!win || this.redirecting) return;
+    const decision = this.redirects.record();
+    if (decision.action === 'giveUp') {
+      this.needsUserReason = 'challenge';
+      this.setState('needsUser');
+      this.showForUser();
+      return;
+    }
+    this.redirecting = true;
+    void (async () => {
+      try {
+        await this.sleep(decision.delayMs);
+        if (this.win === win && this.state !== 'ready') await win.webContents.loadURL(ENGINE_START_URL).catch(() => {});
+      } finally {
+        this.redirecting = false;
+      }
+      // Events that arrived during the reload were ignored; look at where we ended up.
+      if (this.win === win) this.onUrl();
+    })();
   }
 
   private setState(s: EngineState): void {
@@ -180,10 +265,16 @@ export class EngineWindow implements EngineLike {
     }, delay);
   }
 
+  private clearUnresponsive(): void {
+    if (this.unresponsive) clearTimeout(this.unresponsive);
+    this.unresponsive = null;
+  }
+
   private destroyWindow(): void {
     const win = this.win;
     this.win = null;
     this.cdpSession = null;
+    this.redirecting = false;
     if (!win || win.isDestroyed()) return;
     try {
       win.webContents.debugger.detach();

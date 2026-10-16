@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyEngineUrl } from './urlState';
+import { classifyEngineUrl, isAllowedNavigation, RedirectPolicy } from './urlState';
 
 describe('classifyEngineUrl', () => {
   it('recognizes the DM app as ready', () => {
@@ -25,5 +25,56 @@ describe('classifyEngineUrl', () => {
   it('treats blank and invalid urls as starting', () => {
     expect(classifyEngineUrl('about:blank')).toEqual({ kind: 'starting' });
     expect(classifyEngineUrl('')).toEqual({ kind: 'starting' });
+  });
+});
+
+describe('classifyEngineUrl edge cases', () => {
+  it('only treats /direct and its children as the DM app', () => {
+    expect(classifyEngineUrl('https://www.instagram.com/direct')).toEqual({ kind: 'ready' });
+    expect(classifyEngineUrl('https://www.instagram.com/directv/')).toEqual({ kind: 'goInbox' });
+  });
+
+  it('leaves password reset alone as a normal Instagram page', () => {
+    expect(classifyEngineUrl('https://www.instagram.com/accounts/password/reset/')).toEqual({ kind: 'goInbox' });
+  });
+
+  it('rejects http, other ports and lookalike hosts', () => {
+    expect(classifyEngineUrl('http://www.instagram.com/direct/inbox/')).toEqual({ kind: 'foreign' });
+    expect(classifyEngineUrl('https://www.instagram.com:8443/direct/inbox/')).toEqual({ kind: 'foreign' });
+    expect(classifyEngineUrl('https://instagram.com.evil.com/direct/inbox/')).toEqual({ kind: 'foreign' });
+  });
+});
+
+describe('isAllowedNavigation', () => {
+  it('allows https Instagram, Facebook and Meta hosts only', () => {
+    expect(isAllowedNavigation('https://www.instagram.com/accounts/login/')).toBe(true);
+    expect(isAllowedNavigation('https://m.facebook.com/login')).toBe(true);
+    expect(isAllowedNavigation('https://accountscenter.meta.com/x')).toBe(true);
+    expect(isAllowedNavigation('http://www.instagram.com/')).toBe(false);
+    expect(isAllowedNavigation('https://notinstagram.com/')).toBe(false);
+    expect(isAllowedNavigation('https://instagram.com.evil.com/')).toBe(false);
+    expect(isAllowedNavigation('not a url')).toBe(false);
+  });
+});
+
+describe('RedirectPolicy', () => {
+  it('backs off 1s, 2s, 4s then gives up, and resets', () => {
+    const p = new RedirectPolicy(3, 60_000, () => 0);
+    expect(p.record()).toEqual({ action: 'reload', delayMs: 1000 });
+    expect(p.record()).toEqual({ action: 'reload', delayMs: 2000 });
+    expect(p.record()).toEqual({ action: 'reload', delayMs: 4000 });
+    expect(p.record()).toEqual({ action: 'giveUp' });
+    p.reset();
+    expect(p.record()).toEqual({ action: 'reload', delayMs: 1000 });
+  });
+
+  it('forgets redirects older than the window', () => {
+    let t = 0;
+    const p = new RedirectPolicy(3, 60_000, () => t);
+    p.record();
+    p.record();
+    p.record();
+    t = 61_000;
+    expect(p.record()).toEqual({ action: 'reload', delayMs: 1000 });
   });
 });

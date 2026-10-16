@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CLICK_SEND_SCRIPT, clickThreadLinkScript, setFileOnPageInput, threadPathFor } from './pageScripts';
+import { CLICK_SEND_SCRIPT, clickThreadLinkScript, pathMatchesThread, setFileOnPageInput, threadPathFor, waitForThreadUrl } from './pageScripts';
 import { FakeCdp } from './testing';
 
 const run = (script: string): unknown => (0, eval)(script);
@@ -41,9 +41,43 @@ describe('page scripts', () => {
     const cdp = new FakeCdp();
     cdp.responses.set('DOM.getDocument', { root: { nodeId: 1 } });
     cdp.responses.set('DOM.querySelectorAll', { nodeIds: [5, 9] });
-    expect(await setFileOnPageInput(cdp, 'C:\tmp\a.png')).toBe(true);
-    expect(cdp.sent.at(-1)).toEqual({ method: 'DOM.setFileInputFiles', params: { nodeId: 9, files: ['C:\tmp\a.png'] } });
+    expect(await setFileOnPageInput(cdp, 'C:\\tmp\\a.png')).toBe(true);
+    expect(cdp.sent.at(-1)).toEqual({ method: 'DOM.setFileInputFiles', params: { nodeId: 9, files: ['C:\\tmp\\a.png'] } });
     cdp.responses.set('DOM.querySelectorAll', { nodeIds: [] });
     expect(await setFileOnPageInput(cdp, 'x')).toBe(false);
   });
+
+  it('asks for a shallow document and returns false when there is no root', async () => {
+    const cdp = new FakeCdp();
+    expect(await setFileOnPageInput(cdp, 'x')).toBe(false);
+    expect(cdp.sent[0]).toEqual({ method: 'DOM.getDocument', params: { depth: 0 } });
+  });
+
+  it('prefers the submit control in the form around the file input, whatever its language', () => {
+    document.body.innerHTML = '<form><input type="file"><button type="submit">Enviar</button></form>';
+    const btn = document.querySelector('button') as HTMLElement;
+    const click = vi.fn();
+    btn.addEventListener('click', click);
+    expect(run(CLICK_SEND_SCRIPT)).toBe(true);
+    expect(click).toHaveBeenCalledTimes(1);
+  });
+
+  it('matches the thread url with or without a trailing slash', () => {
+    expect(pathMatchesThread('https://www.instagram.com/direct/t/222/', '222')).toBe(true);
+    expect(pathMatchesThread('https://www.instagram.com/direct/t/222', '222')).toBe(true);
+    expect(pathMatchesThread('https://www.instagram.com/direct/t/2222/', '222')).toBe(false);
+    expect(pathMatchesThread('', '222')).toBe(false);
+  });
+
+  it('waits for the thread url, and gives up after the timeout', async () => {
+    let url = 'https://www.instagram.com/direct/inbox/';
+    let slept = 0;
+    const sleep = async (ms: number): Promise<void> => {
+      slept += ms;
+      if (slept >= 500) url = 'https://www.instagram.com/direct/t/222/';
+    };
+    expect(await waitForThreadUrl(() => url, '222', sleep)).toBe(true);
+    expect(await waitForThreadUrl(() => 'https://www.instagram.com/direct/inbox/', '222', async () => {})).toBe(false);
+  });
 });
+
