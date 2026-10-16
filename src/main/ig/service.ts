@@ -38,10 +38,13 @@ export type IgServiceDeps = {
   tmpDir: string;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
-  timeouts?: Partial<{ ready: number; openThread: number; imageEcho: number }>;
+  timeouts?: Partial<{ ready: number; openThread: number; imageEcho: number; sendEcho: number; maybeGrace: number; attach: number }>;
 };
 
-const TIMEOUTS = { ready: 20_000, openThread: 4_000, imageEcho: 30_000 };
+const TIMEOUTS = { ready: 20_000, openThread: 4_000, imageEcho: 30_000, sendEcho: 20_000, maybeGrace: 120_000, attach: 30_000 };
+/** An echo may carry a timestamp slightly before our clock says the send started. */
+const ECHO_SKEW_MS = 5_000;
+const MAX_TRACKED = 200;
 const IMAGE_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
 const POLL_MS = 100;
 
@@ -60,6 +63,12 @@ export class IgChatService implements ChatService {
   private readonly hasOlder = new Map<string, boolean>();
   private offs: (() => void)[] = [];
   private imageQueue: Promise<unknown> = Promise.resolve();
+  private imageBusy = 0;
+  private started = false;
+  private pagedPast = false;
+  private readonly otidByTemp = new Map<string, string>();
+  private readonly claimedImages = new Set<string>();
+  private readonly deferred = new Set<() => void>();
 
   constructor(private readonly deps: IgServiceDeps) {}
 
@@ -96,6 +105,8 @@ export class IgChatService implements ChatService {
   }
 
   start(): void {
+    if (this.started) return;
+    this.started = true;
     this.offs.push(this.deps.engine.events.on('state', () => this.emitStatus()));
     if (this.deps.cache) {
       const cache = this.deps.cache;
@@ -107,6 +118,8 @@ export class IgChatService implements ChatService {
   }
 
   stop(): void {
+    this.started = false;
+    this.flushDeferred();
     this.offs.forEach((off) => off());
     this.offs = [];
     this.deps.engine.stop();
@@ -123,6 +136,33 @@ export class IgChatService implements ChatService {
       default:
         return 'ok';
     }
+  }
+
+  /** Runs fn after ms (or earlier via the returned finish function, or when the service stops or logs out). */
+  private defer(ms: number, fn: () => void): () => void {
+    const finish = (): void => {
+      clearTimeout(timer);
+      if (this.deferred.delete(finish)) fn();
+    };
+    const timer = setTimeout(finish, ms);
+    timer.unref?.();
+    this.deferred.add(finish);
+    return finish;
+  }
+
+  private flushDeferred(): void {
+    for (const finish of [...this.deferred]) finish();
+  }
+
+  private remember(map: Map<string, string>, key: string, value: string): void {
+    map.set(key, value);
+    if (map.size > MAX_TRACKED) map.delete(map.keys().next().value!);
+  }
+
+  private navigate(threadId: string): void {
+    // While an image is being handed to the page, the page must stay on that thread.
+    if (this.imageBusy > 0 || this.deps.engine.state !== 'ready') return;
+    void this.deps.engine.navigateToThread(threadId).catch(() => {});
   }
 
   private emitStatus(): void {
@@ -170,16 +210,19 @@ export class IgChatService implements ChatService {
     this.store.ingestMessages(snap.messages, { silent: true });
     this.inboxCursor = snap.inbox.endCursor;
     this.inboxHasMore = snap.inbox.hasMore;
+    this.pagedPast = false;
     return true;
   }
 
-  private async fetchInboxPage(cursor: string | null, silent: boolean): Promise<Thread[]> {
+  private async fetchInboxPage(cursor: string | null, silent: boolean, keepCursor = false): Promise<Thread[]> {
     const fbid = this.store.viewerFbid;
     if (!fbid) throw new ServiceError('EngineNotReady', 'Instagram is still loading');
     const page = extractThreadListPage(await this.deps.exec.run(OPS.threadList, threadListVars(fbid, cursor)));
     const threads = this.store.ingestThreads(page.nodes, { silent });
-    this.inboxCursor = page.endCursor;
-    this.inboxHasMore = page.hasMore;
+    if (!keepCursor) {
+      this.inboxCursor = page.endCursor;
+      this.inboxHasMore = page.hasMore;
+    }
     return threads;
   }
 
@@ -204,6 +247,7 @@ export class IgChatService implements ChatService {
   async loadMoreInbox(): Promise<Page<Thread>> {
     await this.ready();
     if (!this.inboxHasMore) return { items: [], hasMore: false };
+    this.pagedPast = true;
     const items = await this.fetchInboxPage(this.inboxCursor, true);
     return { items, hasMore: this.inboxHasMore };
   }
@@ -212,7 +256,7 @@ export class IgChatService implements ChatService {
     this.activeThreadId = threadId;
     await this.ready();
     // Navigation is best effort: if the page can't open the thread, the query fallback below still serves it.
-    void this.deps.engine.navigateToThread(threadId).catch(() => {});
+    this.navigate(threadId);
     // The page loads the thread into its own store; the relay delivers it. Fall back to a query if it doesn't.
     await this.waitFor(() => this.store.messagesOf(threadId).length > 0, this.timeout('openThread'));
     if (this.store.messagesOf(threadId).length === 0) {
@@ -248,20 +292,23 @@ export class IgChatService implements ChatService {
 
   async sendText(threadId: string, text: string, replyToId: string | null, clientTempId?: string): Promise<Message> {
     await this.ready();
-    const otid = generateOtid(this.now());
+    // A retry of the same temp id reuses its otid so Instagram can dedupe a send that did go through.
+    const known = clientTempId ? this.otidByTemp.get(clientTempId) : undefined;
+    const otid = known ?? generateOtid(this.now());
+    if (clientTempId && !known) this.remember(this.otidByTemp, clientTempId, otid);
     if (clientTempId) this.store.registerPending(otid, clientTempId);
-    let data: unknown;
+    let res: ReturnType<typeof extractSendResult> = null;
     try {
-      data = await this.deps.exec.run(OPS.sendText, sendTextVars(threadId, text, otid, replyToId));
+      res = extractSendResult(await this.deps.exec.run(OPS.sendText, sendTextVars(threadId, text, otid, replyToId)));
     } catch (err) {
-      this.store.dropPending(otid);
-      throw err;
+      if (err instanceof ServiceError && !err.ambiguous) {
+        this.store.dropPending(otid);
+        throw err;
+      }
     }
-    const res = extractSendResult(data);
-    if (!res) {
-      this.store.dropPending(otid);
-      throw new ServiceError('Unknown', "Instagram didn't confirm the message");
-    }
+    // No confirmation (an ambiguous failure, or a 2xx without a message id): the message may have gone out.
+    if (!res) return this.settleUncertainText(threadId, otid, clientTempId);
+    if (clientTempId) this.otidByTemp.delete(clientTempId);
     const echoed = this.store.find(threadId, res.messageId);
     if (echoed) return echoed;
     const reply = replyToId ? this.store.find(threadId, replyToId) : undefined;
@@ -281,11 +328,38 @@ export class IgChatService implements ChatService {
     return message;
   }
 
+  /** The send may have reached Instagram: look for its echo, and if none comes, report MaybeSent (never a retryable error). */
+  private async settleUncertainText(threadId: string, otid: string, clientTempId?: string): Promise<Message> {
+    if (!clientTempId) {
+      this.store.dropPending(otid);
+      throw new ServiceError('MaybeSent', 'Instagram did not confirm the message. It may have been sent');
+    }
+    await this.waitFor(() => !this.store.isPending(otid), this.timeout('sendEcho'));
+    const echoed = this.store.isPending(otid) ? undefined : this.store.findByTempId(threadId, clientTempId);
+    if (echoed) {
+      this.otidByTemp.delete(clientTempId);
+      return echoed;
+    }
+    // Keep the otid pending for a while so a late echo is still tagged and swaps the temp bubble.
+    this.defer(this.timeout('maybeGrace'), () => {
+      this.store.dropPending(otid);
+      this.otidByTemp.delete(clientTempId);
+    });
+    throw new ServiceError('MaybeSent', 'Instagram did not confirm the message. It may have been sent');
+  }
+
   sendImage(threadId: string, bytes: Uint8Array, mime: string, clientTempId?: string): Promise<Message> {
     const ext = IMAGE_EXT[mime];
     if (!ext) return Promise.reject(new ServiceError('Unknown', 'Only PNG, JPEG, GIF and WebP images can be sent'));
     // One image at a time: each send must be able to tell which echo is its own.
-    const run = this.imageQueue.then(() => this.sendImageNow(threadId, bytes, ext, clientTempId));
+    this.imageBusy++;
+    const run = this.imageQueue.then(async () => {
+      try {
+        return await this.sendImageNow(threadId, bytes, ext, clientTempId);
+      } finally {
+        if (--this.imageBusy === 0 && this.activeThreadId) this.navigate(this.activeThreadId);
+      }
+    });
     this.imageQueue = run.catch(() => {});
     return run;
   }
@@ -294,18 +368,41 @@ export class IgChatService implements ChatService {
     await this.ready();
     const file = join(this.deps.tmpDir, `igchat-upload-${this.now()}-${Math.floor(Math.random() * 1e6)}.${ext}`);
     await writeFile(file, bytes);
+    const startedAt = this.now();
     const before = new Set(this.store.messagesOf(threadId).map((m) => m.id));
-    const isNewOwnImage = (m: Message): boolean => !before.has(m.id) && m.senderId === this.viewerId && m.kind === 'image';
+    const isMine = (m: Message): boolean =>
+      !before.has(m.id) && !this.claimedImages.has(m.id) && m.senderId === this.viewerId && m.kind === 'image' && m.timestamp >= startedAt - ECHO_SKEW_MS;
+    const claim = (m: Message): Message => {
+      this.claimedImages.add(m.id);
+      if (this.claimedImages.size > MAX_TRACKED) this.claimedImages.delete(this.claimedImages.values().next().value!);
+      // Tagging through the store tells the renderer to swap the temp bubble in place.
+      return clientTempId ? (this.store.tagAndEmit(threadId, m.id, clientTempId) ?? m) : m;
+    };
     try {
-      // attachImage throws only before the file is handed to the page (safe to report and retry). Once it resolves
-      // the image may already be on its way, so from here only the echo decides, and a missing echo is never retryable.
-      await this.deps.engine.attachImage(threadId, file);
-      await this.waitFor(() => this.store.messagesOf(threadId).some(isNewOwnImage), this.timeout('imageEcho'));
-      const sent = this.store.messagesOf(threadId).filter(isNewOwnImage).at(-1);
-      if (!sent) throw new ServiceError('Unknown', "Instagram didn't confirm the image. It may have been sent, so check the conversation before sending it again");
-      const tagged = clientTempId ? { ...sent, clientTempId } : sent;
-      this.store.upsertOwn(tagged);
-      return tagged;
+      // attachImage throws only before the file is handed to the page (safe to report, definite failure). Once it
+      // resolves, or the deadline passes with the outcome unknown, only the echo decides, and a missing echo is MaybeSent.
+      const attach = this.deps.engine.attachImage(threadId, file);
+      attach.catch(() => {});
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([attach, new Promise<void>((resolve) => (deadline = setTimeout(resolve, this.timeout('attach'))))]);
+      } finally {
+        clearTimeout(deadline);
+      }
+      await this.waitFor(() => this.store.messagesOf(threadId).some(isMine), this.timeout('imageEcho'));
+      const sent = this.store.messagesOf(threadId).filter(isMine).at(-1);
+      if (sent) return claim(sent);
+      // Keep watching: a late echo is tagged so the renderer swaps the "not confirmed" bubble for it.
+      let off = (): void => {};
+      const finish = this.defer(this.timeout('maybeGrace'), () => off());
+      off = this.store.events.on('msg:new', (tid, msgs) => {
+        const late = tid === threadId ? msgs.find(isMine) : undefined;
+        if (late) {
+          claim(late);
+          finish();
+        }
+      });
+      throw new ServiceError('MaybeSent', 'Instagram did not confirm the image. It may have been sent');
     } finally {
       // Removed only after the echo wait: the page reads the file lazily after it is handed over.
       await unlink(file).catch(() => {});
@@ -337,8 +434,11 @@ export class IgChatService implements ChatService {
     return this.sendReaction(threadId, messageId, emoji, false);
   }
 
-  unreact(threadId: string, messageId: string): Promise<Message> {
-    const mine = this.store.find(threadId, messageId)?.reactions.find((r) => r.userIds.includes(this.viewerId))?.emoji ?? '';
+  async unreact(threadId: string, messageId: string): Promise<Message> {
+    const m = this.store.find(threadId, messageId);
+    if (!m) throw new ServiceError('NotFound', 'Message not found');
+    const mine = m.reactions.find((r) => r.userIds.includes(this.viewerId))?.emoji;
+    if (!mine) return m; // nothing of ours to remove: send no request
     return this.sendReaction(threadId, messageId, mine, true);
   }
 
@@ -357,7 +457,7 @@ export class IgChatService implements ChatService {
 
   setActiveThread(threadId: string | null): void {
     this.activeThreadId = threadId;
-    if (threadId && this.deps.engine.state === 'ready') void this.deps.engine.navigateToThread(threadId).catch(() => {});
+    if (threadId) this.navigate(threadId);
   }
 
   setFocused(focused: boolean): void {
@@ -376,7 +476,12 @@ export class IgChatService implements ChatService {
     await this.deps.engine.logout();
     this.store.clear();
     this.deps.cache?.clear();
+    this.flushDeferred();
     this.hasOlder.clear();
+    this.otidByTemp.clear();
+    this.claimedImages.clear();
+    this.activeThreadId = null;
+    this.pagedPast = false;
     this.inboxCursor = null;
     this.inboxHasMore = false;
     this.emitStatus();
@@ -399,7 +504,7 @@ export class IgChatService implements ChatService {
         const present = new Set(page.nodes.map(messageIdOf).filter((id): id is string => !!id));
         const times = page.nodes.map((n) => Number((n as Record<string, unknown>).timestamp_ms)).filter(Number.isFinite);
         const oldestInPage = times.length ? Math.min(...times) : Number.POSITIVE_INFINITY;
-        for (const c of candidates) if (!present.has(c.messageId) && c.timestamp >= oldestInPage) this.store.remove(threadId, c.messageId);
+        for (const c of candidates) if (!present.has(c.messageId) && c.timestamp > oldestInPage) this.store.remove(threadId, c.messageId);
       } catch {
         // Leave the message in place; a later refresh will settle it.
       }
@@ -420,7 +525,7 @@ export class IgChatService implements ChatService {
   /** Fallback refresh used by Sync when the relay feed is unavailable. */
   async refresh(): Promise<void> {
     if (this.deps.engine.state !== 'ready') return;
-    await this.fetchInboxPage(null, false);
+    await this.fetchInboxPage(null, false, this.pagedPast);
     const active = this.activeThreadId;
     if (active) {
       const page = extractMessageListPage(await this.deps.exec.run(OPS.messageList, messageListVars(active, null)));

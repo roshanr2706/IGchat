@@ -59,6 +59,7 @@
     class:with-header={showHeader}
     class:pending={message.status === 'pending'}
     class:failed={message.status === 'failed'}
+    class:uncertain={message.status === 'uncertain'}
     class:editing
     class:replying={ui.replyTo?.id === message.id}
     data-message-id={message.id}
@@ -102,6 +103,12 @@
         <button onclick={() => messages.discard(thread.id, message.id)}>Delete</button>
       </div>
     {/if}
+    {#if message.status === 'uncertain'}
+      <div class="failed-actions">
+        Not confirmed. It may have been sent.
+        <button onclick={() => messages.discard(thread.id, message.id)}>Discard</button>
+      </div>
+    {/if}
     {#if interactive && !editing && (hovered || pinned)}
       <div class="actions-anchor">
         <MessageActions {message} threadId={thread.id} {myId} variant="toolbar" onpin={(open) => (pinned = open)} />
@@ -132,6 +139,9 @@
   }
   .message.pending {
     opacity: 0.55;
+  }
+  .message.uncertain .body {
+    opacity: 0.7;
   }
   .message.failed .body {
     color: var(--danger);

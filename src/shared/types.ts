@@ -25,7 +25,7 @@ export type Thread = {
 
 export type Reaction = { emoji: string; userIds: string[] };
 export type ReplyRef = { messageId: string; senderId: string; preview: string };
-export type MessageStatus = 'sent' | 'pending' | 'failed';
+export type MessageStatus = 'sent' | 'pending' | 'failed' | 'uncertain';
 
 export type MessageBase = {
   id: string;

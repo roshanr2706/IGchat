@@ -102,6 +102,33 @@ describe('Exec', () => {
     await expect(fast.run('IGDirectTextSendMutation', {})).resolves.toEqual({ ok: 1 });
   });
 
+  it('marks failures that may follow an issued request as ambiguous, and definite ones as not', async () => {
+    const run = () => exec.run('IGDirectTextSendMutation', {}).catch((e: ServiceError) => e);
+    page.handler = () => ({ status: 0, url: '', text: 'AbortError' });
+    expect(await run()).toMatchObject({ code: 'Network', ambiguous: true });
+    page.handler = () => {
+      throw new Error('Object has been destroyed');
+    };
+    expect(await run()).toMatchObject({ code: 'EngineNotReady', ambiguous: true });
+    page.handler = () => ({ status: 200, url: '', text: 'not json' });
+    expect(await run()).toMatchObject({ code: 'Unknown', ambiguous: true });
+    const fast = new Exec(page, tap, new DocIdRegistry(), { fetchTimeoutMs: 20, jitterMs: () => 0, sleep: async () => {} });
+    page.handler = () => new Promise(() => {});
+    expect(await fast.run('IGDirectTextSendMutation', {}).catch((e: ServiceError) => e)).toMatchObject({ code: 'Network', ambiguous: true });
+    for (const [status, url, text] of [[500, '', '{}'], [429, '', '{}'], [400, '', '{}'], [403, '', '{}'], [200, 'https://www.instagram.com/accounts/login/', '<html>'], [200, '', '{"errors":[{"message":"bad"}]}']] as const) {
+      page.handler = () => ({ status, url, text });
+      expect(((await run()) as ServiceError).ambiguous).toBe(false);
+    }
+  });
+
+  it('treats failures before any request is issued as definite', async () => {
+    const unknownOp = await exec.run('NoSuchOperation', {}).catch((e: ServiceError) => e);
+    expect(unknownOp).toMatchObject({ code: 'EngineNotReady', ambiguous: false });
+    tap.envelope = null;
+    const quick = new Exec(page, tap, new DocIdRegistry(), { envelopeWaitMs: 500, jitterMs: () => 0, sleep: async () => {} });
+    expect(await quick.run('IGDirectTextSendMutation', {}).catch((e: ServiceError) => e)).toMatchObject({ ambiguous: false });
+  });
+
   it('fails with EngineNotReady for unknown operations or when no envelope arrives', async () => {
     await expect(exec.run('NoSuchOperation', {})).rejects.toMatchObject({ code: 'EngineNotReady' });
     tap.envelope = null;

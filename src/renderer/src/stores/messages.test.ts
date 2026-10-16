@@ -281,4 +281,42 @@ describe('messages store', () => {
     await messages.open(T);
     expect(messages.get(T)!.firstUnreadId).toBe('c');
   });
+
+  it('marks a MaybeSent text as uncertain: no retry, discard allowed', async () => {
+    setup({ 'msg:sendText': () => { throw new IgError('MaybeSent', 'maybe'); } });
+    await messages.open(T);
+    await messages.sendText(T, 'hmm', null);
+    const m = messages.get(T)!.messages.at(-1)!;
+    expect(m.status).toBe('uncertain');
+    const calls = bridge.calls.filter((c) => c.channel === 'msg:sendText').length;
+    await messages.retry(T, m.id);
+    expect(bridge.calls.filter((c) => c.channel === 'msg:sendText')).toHaveLength(calls);
+    expect(messages.get(T)!.messages.at(-1)!.status).toBe('uncertain');
+    messages.discard(T, m.id);
+    expect(ids()).toEqual(['c', 'd']);
+  });
+
+  it('marks a MaybeSent image as uncertain', async () => {
+    setup({ 'msg:sendImage': () => { throw new IgError('MaybeSent', 'maybe'); } });
+    await messages.open(T);
+    await messages.sendImage(T, { bytes: new Uint8Array([1]), mime: 'image/png', previewUrl: 'blob:x' });
+    expect(messages.get(T)!.messages.at(-1)!.status).toBe('uncertain');
+  });
+
+  it('a late echo swaps an uncertain bubble for the real message (text via msg:new, image via msg:updated)', async () => {
+    setup({ 'msg:sendText': () => { throw new IgError('MaybeSent', 'maybe'); }, 'msg:sendImage': () => { throw new IgError('MaybeSent', 'maybe'); } });
+    await messages.open(T);
+    await messages.sendText(T, 'late', null);
+    const t = messages.get(T)!.messages.at(-1)!;
+    messages.onNew(T, [makeText({ id: 'real-late', threadId: T, senderId: 'me', text: 'late', timestamp: 9, clientTempId: t.id })]);
+    expect(ids()).toEqual(['c', 'd', 'real-late']);
+    expect(messages.get(T)!.messages.at(-1)!.status).toBe('sent');
+    await messages.sendImage(T, { bytes: new Uint8Array([1]), mime: 'image/png', previewUrl: 'blob:y' });
+    const img = messages.get(T)!.messages.at(-1)!;
+    expect(img.status).toBe('uncertain');
+    messages.onNew(T, [makeImage({ id: 'real-img2', threadId: T, senderId: 'me', timestamp: 10 })]);
+    messages.onUpdated(T, makeImage({ id: 'real-img2', threadId: T, senderId: 'me', timestamp: 10, clientTempId: img.id }));
+    expect(ids()).toEqual(['c', 'd', 'real-late', 'real-img2']);
+    expect(messages.get(T)!.messages.at(-1)!.status).toBe('sent');
+  });
 });

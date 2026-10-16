@@ -260,3 +260,26 @@ describe('IgStore messages', () => {
     expect(store.candidatesForRemoval(['item-2', 'item-2'])).toHaveLength(1);
   });
 });
+
+describe('IgStore tagging', () => {
+  it('reports pending otids until the echo consumes them', () => {
+    const s = new IgStore();
+    s.ingestThreads(threadNodes, { silent: true });
+    s.registerPending('otid-1', 'temp-1');
+    expect(s.isPending('otid-1')).toBe(true);
+    s.ingestMessages([{ ...messageNodes[0], message_id: 'mid.$e', id: 'item-e', offline_threading_id: 'otid-1' }]);
+    expect(s.isPending('otid-1')).toBe(false);
+    expect(s.findByTempId(T1, 'temp-1')?.id).toBe('mid.$e');
+  });
+
+  it('tags a stored message and emits msg:updated with the temp id', () => {
+    const s = new IgStore();
+    s.ingestThreads(threadNodes, { silent: true });
+    s.ingestMessages(messageNodes, { silent: true });
+    const updated = vi.fn();
+    s.events.on('msg:updated', updated);
+    expect(s.tagAndEmit(T1, 'mid.$m2', 'temp-9')).toMatchObject({ id: 'mid.$m2', clientTempId: 'temp-9' });
+    expect(updated).toHaveBeenCalledWith(T1, expect.objectContaining({ clientTempId: 'temp-9' }));
+    expect(s.tagAndEmit(T1, 'nope', 'x')).toBeNull();
+  });
+});

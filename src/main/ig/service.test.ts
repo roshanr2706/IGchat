@@ -235,13 +235,70 @@ describe('IgChatService writes', () => {
     expect(news.mock.calls[0]![1][0]).toMatchObject({ id: 'mid.$echo', clientTempId: 'temp-4' });
   });
 
-  it('propagates send failures and unconfirmed sends as errors', async () => {
+  const otidOf = (i: number): string => exec.calls[i]!.variables.offline_threading_id as string;
+  const echoRecord = (otid: string) => ({ ...messageNodes[0], message_id: 'mid.$late', id: 'item-late', offline_threading_id: otid });
+  const mk = (extra: Partial<ConstructorParameters<typeof IgChatService>[0]> = {}) =>
+    new IgChatService({ engine, relay, exec, store, cache, tmpDir: tmp, now: () => NOW, sleep: async () => {}, ...extra });
+
+  it('a definite failure rejects with its code, drops the pending otid and reuses the otid on retry', async () => {
     exec.handlers[OPS.sendText] = () => {
-      throw new ServiceError('Network', 'offline');
+      throw new ServiceError('RateLimited', 'slow down');
     };
-    await expect(svc.sendText(T1, 'x', null, 'temp-9')).rejects.toMatchObject({ code: 'Network' });
+    await expect(svc.sendText(T1, 'x', null, 'temp-9')).rejects.toMatchObject({ code: 'RateLimited' });
+    expect(store.isPending(otidOf(0))).toBe(false);
+    await expect(svc.sendText(T1, 'x', null, 'temp-9')).rejects.toMatchObject({ code: 'RateLimited' });
+    expect(otidOf(1)).toBe(otidOf(0));
+  });
+
+  it('an ambiguous failure followed by an echo during the wait resolves with the tagged message', async () => {
+    exec.handlers[OPS.sendText] = () => {
+      throw new ServiceError('Network', 'timed out', true);
+    };
+    let sleeps = 0;
+    const s = mk({
+      sleep: async () => {
+        if (++sleeps === 3) store.ingestMessages([echoRecord(otidOf(0))]);
+      }
+    });
+    expect(await s.sendText(T1, 'x', null, 'temp-a')).toMatchObject({ id: 'mid.$late', clientTempId: 'temp-a' });
+  });
+
+  it('an ambiguous failure with no echo rejects MaybeSent and still tags a late echo until the grace ends', async () => {
+    exec.handlers[OPS.sendText] = () => {
+      throw new ServiceError('EngineNotReady', 'page gone', true);
+    };
+    const s = mk({ timeouts: { sendEcho: 200, maybeGrace: 60_000 } });
+    await expect(s.sendText(T1, 'x', null, 'temp-b')).rejects.toMatchObject({ code: 'MaybeSent' });
+    expect(store.isPending(otidOf(0))).toBe(true);
+    const news = vi.fn();
+    s.on('msg:new', news);
+    store.ingestMessages([echoRecord(otidOf(0))]);
+    expect(news.mock.calls[0]![1][0]).toMatchObject({ id: 'mid.$late', clientTempId: 'temp-b' });
+    s.stop();
+  });
+
+  it('drops the pending otid once the grace period ends', async () => {
+    exec.handlers[OPS.sendText] = () => {
+      throw new ServiceError('Network', 'timed out', true);
+    };
+    const s = mk({ timeouts: { sendEcho: 100, maybeGrace: 20 } });
+    await expect(s.sendText(T1, 'x', null, 'temp-c')).rejects.toMatchObject({ code: 'MaybeSent' });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(store.isPending(otidOf(0))).toBe(false);
+  });
+
+  it('a 2xx without a message id is treated as maybe sent, not as a retryable failure', async () => {
     exec.handlers[OPS.sendText] = () => ({});
-    await expect(svc.sendText(T1, 'x', null, 'temp-9')).rejects.toMatchObject({ code: 'Unknown' });
+    const s = mk({ timeouts: { sendEcho: 100, maybeGrace: 60_000 } });
+    await expect(s.sendText(T1, 'x', null, 'temp-d')).rejects.toMatchObject({ code: 'MaybeSent' });
+    s.stop();
+  });
+
+  it('unreact with no reaction of ours sends nothing', async () => {
+    const m = await svc.unreact(T1, 'mid.$m3');
+    expect(m.id).toBe('mid.$m3');
+    expect(exec.calls).toHaveLength(0);
+    await expect(svc.unreact(T1, 'nope')).rejects.toMatchObject({ code: 'NotFound' });
   });
 
   it('edits own recent text and refuses old or foreign messages', async () => {
@@ -319,13 +376,70 @@ describe('IgChatService writes', () => {
     expect(await slow.sendImage(T1, new Uint8Array([1]), 'image/jpeg', 't')).toMatchObject({ id: 'mid.$late', clientTempId: 't' });
   });
 
-  it('fails an image send when the page never shows it, saying it may have gone out, and removes the temp file', async () => {
-    const quiet = new IgChatService({ engine, relay, exec, store, tmpDir: tmp, now: () => NOW, sleep: async () => {}, timeouts: { imageEcho: 300 } });
+  it('rejects MaybeSent when the page never shows the image, and removes the temp file', async () => {
+    const quiet = mk({ timeouts: { imageEcho: 300, maybeGrace: 60_000 } });
     const before = readdirSync(tmp).length;
     const err = await quiet.sendImage(T1, new Uint8Array([1]), 'image/jpeg', 't').catch((e: unknown) => e);
-    expect(err).toMatchObject({ code: 'Unknown' });
+    expect(err).toMatchObject({ code: 'MaybeSent' });
     expect((err as Error).message).toMatch(/may have been sent/i);
     expect(readdirSync(tmp).length).toBe(before);
+    quiet.stop();
+  });
+
+  it('tags a late image echo after MaybeSent and emits msg:updated', async () => {
+    const s = mk({ timeouts: { imageEcho: 300, maybeGrace: 60_000 } });
+    await expect(s.sendImage(T1, new Uint8Array([1]), 'image/png', 'temp-late')).rejects.toMatchObject({ code: 'MaybeSent' });
+    const updated = vi.fn();
+    s.on('msg:updated', updated);
+    store.ingestMessages([imageRecord('later')]);
+    expect(updated).toHaveBeenCalledWith(T1, expect.objectContaining({ id: 'mid.$later', clientTempId: 'temp-late' }));
+    expect(store.find(T1, 'mid.$later')).toMatchObject({ clientTempId: 'temp-late' });
+    // A second image is not mistaken for the same send.
+    updated.mockClear();
+    store.ingestMessages([imageRecord('other')]);
+    expect(updated).not.toHaveBeenCalled();
+    s.stop();
+  });
+
+  it('emits msg:updated with the tag when the echo arrives during the call', async () => {
+    const updated = vi.fn();
+    svc.on('msg:updated', updated);
+    engine.onAttach = () => void store.ingestMessages([imageRecord('now')]);
+    await svc.sendImage(T1, new Uint8Array([1]), 'image/png', 'temp-now');
+    expect(updated).toHaveBeenCalledWith(T1, expect.objectContaining({ id: 'mid.$now', clientTempId: 'temp-now' }));
+  });
+
+  it('does not match an old own image that shows up during the wait', async () => {
+    engine.onAttach = () => void store.ingestMessages([{ ...imageRecord('old'), timestamp_ms: String(NOW - 60_000) }]);
+    const s = mk({ timeouts: { imageEcho: 300, maybeGrace: 60_000 } });
+    await expect(s.sendImage(T1, new Uint8Array([1]), 'image/png', 'temp-old')).rejects.toMatchObject({ code: 'MaybeSent' });
+    s.stop();
+  });
+
+  it('treats a hung attach as unknown after its deadline instead of wedging the queue', async () => {
+    engine.attachImage = () => new Promise<void>(() => {});
+    const s = mk({ timeouts: { attach: 20, imageEcho: 100, maybeGrace: 60_000 } });
+    await expect(s.sendImage(T1, new Uint8Array([1]), 'image/png', 'temp-h')).rejects.toMatchObject({ code: 'MaybeSent' });
+    s.stop();
+  });
+
+  it('does not navigate the page while an image is being handed over, and navigates once it is done', async () => {
+    let release!: () => void;
+    let started = false;
+    engine.attachImage = () => {
+      started = true;
+      return new Promise<void>((resolve) => (release = resolve));
+    };
+    exec.handlers[OPS.messageList] = () => ({ fetch__SlideThread: { as_ig_direct_thread: { slide_messages: { edges: [], page_info: {} } } } });
+    const send = svc.sendImage(T1, new Uint8Array([1]), 'image/png', 'temp-nav');
+    await vi.waitFor(() => expect(started).toBe(true));
+    await svc.openThread('1000000000000002');
+    svc.setActiveThread('1000000000000002');
+    expect(engine.navigated).toEqual([]);
+    store.ingestMessages([imageRecord('nav')]);
+    release();
+    await send;
+    expect(engine.navigated).toEqual(['1000000000000002']);
   });
 
   it('serializes image sends so each waits for its own echo', async () => {
@@ -388,6 +502,39 @@ describe('IgChatService live data', () => {
     svc.setActiveThread(T1);
     await svc.refresh();
     expect(exec.calls.map((c) => c.name)).toEqual([OPS.threadList, OPS.messageList]);
+  });
+
+  it('start() twice registers listeners once; logout clears the active thread', async () => {
+    const statuses: string[] = [];
+    svc.on('sync:status', (s) => statuses.push(s));
+    svc.start();
+    svc.start();
+    expect(engine.started).toBe(1);
+    engine.set('starting');
+    expect(statuses.filter((s) => s === 'starting')).toHaveLength(1);
+    svc.setActiveThread(T1);
+    await svc.logout();
+    expect(svc.activeThread).toBeNull();
+  });
+
+  it('refresh() keeps the stored cursor once the user has paged past the first page', async () => {
+    exec.handlers[OPS.threadList] = () => ({ fetch__SlideMailbox: { threads_by_folder: { edges: [], page_info: { end_cursor: 't3', has_next_page: true } } } });
+    await svc.loadMoreInbox();
+    exec.handlers[OPS.threadList] = () => ({ fetch__SlideMailbox: { threads_by_folder: { edges: [], page_info: { end_cursor: 'first-page', has_next_page: true } } } });
+    await svc.refresh();
+    exec.handlers[OPS.threadList] = () => ({ fetch__SlideMailbox: { threads_by_folder: { edges: [], page_info: { end_cursor: null, has_next_page: false } } } });
+    await svc.loadMoreInbox();
+    expect(exec.calls.at(-1)!.variables.cursor).toBe('t3');
+  });
+
+  it('does not remove a message that ties with the oldest message of the verification page', async () => {
+    const removed = vi.fn();
+    svc.on('msg:removed', removed);
+    const oldest = store.find(T1, 'mid.$m2')!.timestamp;
+    // The page's oldest message shares m2's timestamp but is a different message: m2 must be kept.
+    exec.handlers[OPS.messageList] = () => ({ fetch__SlideThread: { as_ig_direct_thread: { slide_messages: { edges: [{ node: { ...messageNodes[3], timestamp_ms: String(oldest) } }], page_info: {} } } } });
+    await svc.applyDelta({ threads: [], messages: [], removed: ['item-2'] });
+    expect(removed).not.toHaveBeenCalled();
   });
 
   it('refresh() does nothing while the engine is not ready', async () => {

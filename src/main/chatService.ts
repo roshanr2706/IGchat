@@ -42,7 +42,9 @@ export interface ChatService {
 export class ServiceError extends Error {
   constructor(
     readonly code: ErrorCode,
-    message: string
+    message: string,
+    /** True when the request may already have reached Instagram, so a blind retry could duplicate it. */
+    readonly ambiguous = false
   ) {
     super(message);
     this.name = 'ServiceError';

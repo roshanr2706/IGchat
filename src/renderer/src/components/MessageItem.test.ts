@@ -116,4 +116,15 @@ describe('MessageItem interactions', () => {
     await fireEvent.contextMenu(screen.getByText('hey'), { clientX: 10, clientY: 20 });
     expect(ui.contextMenu).toEqual({ threadId: 't1', messageId: 'm1', x: 10, y: 20 });
   });
+
+  it('shows only Discard for a send that may have gone out, and Retry plus Delete for a definite failure', async () => {
+    const { unmount } = renderMessage({ ...makeText({ id: 'tmp1', threadId: 't1', senderId: 'me', text: 'maybe' }), status: 'uncertain' });
+    expect(screen.getByText(/Not confirmed. It may have been sent/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Discard' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    unmount();
+    renderMessage({ ...makeText({ id: 'tmp2', threadId: 't1', senderId: 'me', text: 'failed' }), status: 'failed' });
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Discard' })).toBeNull();
+  });
 });

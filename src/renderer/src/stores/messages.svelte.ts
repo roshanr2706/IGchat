@@ -107,9 +107,10 @@ class MessagesStore {
     st.messages[index] = { ...real, clientTempId: tempId };
   }
 
-  private fail(threadId: string, tempId: string): void {
+  /** A definite failure offers Retry; a send that may have reached Instagram ("MaybeSent") must never be retried blindly. */
+  private fail(threadId: string, tempId: string, err?: unknown): void {
     const m = this.find(threadId, tempId);
-    if (m) m.status = 'failed';
+    if (m) m.status = err instanceof IgError && err.code === 'MaybeSent' ? 'uncertain' : 'failed';
   }
 
   private replace(threadId: string, message: Message): void {
@@ -122,8 +123,8 @@ class MessagesStore {
   private async deliverText(threadId: string, tempId: string, text: string, replyToId: string | null): Promise<void> {
     try {
       this.confirm(threadId, tempId, await call('msg:sendText', threadId, text, replyToId, tempId));
-    } catch {
-      this.fail(threadId, tempId);
+    } catch (err) {
+      this.fail(threadId, tempId, err);
     }
   }
 
@@ -131,8 +132,16 @@ class MessagesStore {
     try {
       this.confirm(threadId, tempId, await call('msg:sendImage', threadId, payload.bytes, payload.mime, tempId));
       if (this.imagePayloads.delete(tempId)) revoke(payload.previewUrl);
-    } catch {
-      this.fail(threadId, tempId);
+    } catch (err) {
+      this.fail(threadId, tempId, err);
+    }
+  }
+
+  private releasePayload(tempId: string): void {
+    const payload = this.imagePayloads.get(tempId);
+    if (payload) {
+      revoke(payload.previewUrl);
+      this.imagePayloads.delete(tempId);
     }
   }
 
@@ -164,7 +173,8 @@ class MessagesStore {
   discard(threadId: string, tempId: string): void {
     const st = this.byThread[threadId];
     if (!st) return;
-    if (this.find(threadId, tempId)?.status !== 'failed') return;
+    const status = this.find(threadId, tempId)?.status;
+    if (status !== 'failed' && status !== 'uncertain') return;
     st.messages = st.messages.filter((m) => m.id !== tempId);
     const payload = this.imagePayloads.get(tempId);
     if (payload) {
@@ -225,7 +235,7 @@ class MessagesStore {
     const index = st.messages.findIndex((m) => m.id === messageId);
     if (index < 0) return;
     const status = st.messages[index]!.status;
-    if (status === 'failed') {
+    if (status === 'failed' || status === 'uncertain') {
       this.discard(threadId, messageId);
       return;
     }
@@ -251,6 +261,7 @@ class MessagesStore {
       const tempIndex = m.clientTempId ? st.messages.findIndex((x) => x.id === m.clientTempId) : -1;
       if (tempIndex >= 0) {
         st.messages[tempIndex] = { ...m };
+        this.releasePayload(m.clientTempId!);
         // An untagged copy of the same message may already be shown; keep only the swapped bubble.
         st.messages = st.messages.filter((x, i) => i === tempIndex || x.id !== m.id);
         continue;

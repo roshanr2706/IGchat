@@ -68,12 +68,13 @@ export class Exec {
       res = await Promise.race([
         this.page.evaluate<PageResponse>(fetchScript(req, timeout)),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new ServiceError('Network', `${name} timed out`)), timeout + GUARD_MARGIN_MS);
+          timer = setTimeout(() => reject(new ServiceError('Network', `${name} timed out`, true)), timeout + GUARD_MARGIN_MS);
         })
       ]);
     } catch (e) {
       if (e instanceof ServiceError) throw e;
-      throw new ServiceError('EngineNotReady', `Instagram page is not available for ${name}`);
+      // The request may or may not have been issued before the page failed: ambiguous.
+      throw new ServiceError('EngineNotReady', `Instagram page is not available for ${name}`, true);
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -84,8 +85,10 @@ export class Exec {
       json = null;
     }
     const code = classifyGraphQLFailure(res?.status ?? 0, res?.url ?? '', json);
-    if (code) throw new ServiceError(code, `${name} failed (${res?.status ?? 0})`);
-    if (!json) throw new ServiceError('Unknown', `${name} returned an unreadable response`);
+    // Status 0 means the request started but no HTTP answer came back (abort, dropped connection): ambiguous.
+    // Every classified HTTP answer (4xx/5xx, login or challenge redirect, GraphQL errors) is a definite failure.
+    if (code) throw new ServiceError(code, `${name} failed (${res?.status ?? 0})`, !res || res.status === 0);
+    if (!json) throw new ServiceError('Unknown', `${name} returned an unreadable response`, true);
     return (json.data ?? null) as T;
   }
 }

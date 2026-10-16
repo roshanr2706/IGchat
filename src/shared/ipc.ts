@@ -2,7 +2,7 @@ import type { Settings } from './settings';
 import type { ThemeDef } from './theme';
 import type { AuthStatus, Message, Page, SyncStatus, Thread, User } from './types';
 
-export type ErrorCode = 'AuthExpired' | 'Checkpoint' | 'RateLimited' | 'Network' | 'EditWindowExpired' | 'NotFound' | 'EngineNotReady' | 'Unknown';
+export type ErrorCode = 'AuthExpired' | 'Checkpoint' | 'RateLimited' | 'Network' | 'EditWindowExpired' | 'NotFound' | 'EngineNotReady' | 'MaybeSent' | 'Unknown';
 export type Result<T> = { ok: true; value: T } | { ok: false; code: ErrorCode; message: string };
 
 /** `lastSeenMessageId`: the newest message the viewer had seen when the page was fetched (drives the "NEW" divider on first open). */

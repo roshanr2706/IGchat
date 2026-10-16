@@ -174,6 +174,26 @@ export class IgStore {
     this.pendingByOtid.delete(otid);
   }
 
+  /** Whether a send's otid is still waiting for its echo (the echo consumes it). */
+  isPending(otid: string): boolean {
+    return this.pendingByOtid.has(otid);
+  }
+
+  /** The stored message that echoed a send, found by the temp id it was tagged with. */
+  findByTempId(threadId: string, clientTempId: string): Message | undefined {
+    return this.messagesOf(threadId).find((m) => m.clientTempId === clientTempId);
+  }
+
+  /** Tags an already-stored message with the temp id of the send it answers and tells the renderer to swap the temp bubble. */
+  tagAndEmit(threadId: string, messageId: string, clientTempId: string): Message | null {
+    const m = this.find(threadId, messageId);
+    if (!m) return null;
+    const tagged = { ...m, clientTempId };
+    this.bucket(threadId).set(messageId, tagged);
+    this.events.emit('msg:updated', threadId, tagged);
+    return tagged;
+  }
+
   thread(id: string): Thread | undefined {
     return this.threadsById.get(id)?.thread;
   }
