@@ -268,11 +268,59 @@ describe('EngineWindow handover to the user', () => {
   });
 });
 
+describe('EngineWindow resuming after an auth step', () => {
+  const LOOP = (u: string): string => (u === INBOX ? 'https://www.instagram.com/' : u);
+  const nav = async (url: string): Promise<void> => {
+    const wc = win().webContents;
+    wc.url = url;
+    wc.emit('did-navigate', {}, url);
+    await flush();
+    await flush();
+  };
+  const giveUp = async (): Promise<EngineWindow> => {
+    h.state.nextUrl = LOOP;
+    const e = new EngineWindow({ sleep: instant });
+    await e.start();
+    await vi.waitFor(() => expect(e.state).toBe('needsUser'));
+    return e;
+  };
+
+  it('resumes when the user clears a checkpoint after a give-up', async () => {
+    const e = await giveUp();
+    await nav('https://www.instagram.com/challenge/x/');
+    const before = win().webContents.loads.filter((u) => u === INBOX).length;
+    h.state.cookies = [{}];
+    win().webContents.nextUrl = (u) => u;
+    await nav('https://www.instagram.com/');
+    await vi.waitFor(() => expect(e.state).toBe('ready'));
+    expect(win().webContents.loads.filter((u) => u === INBOX).length - before).toBe(1);
+  });
+
+  it('resumes when the user returns from Facebook login after a give-up', async () => {
+    const e = await giveUp();
+    await nav('https://www.facebook.com/login');
+    const before = win().webContents.loads.length;
+    h.state.cookies = [{}];
+    win().webContents.nextUrl = (u) => u;
+    await nav('https://www.instagram.com/');
+    await vi.waitFor(() => expect(e.state).toBe('ready'));
+    expect(win().webContents.loads.length - before).toBe(1);
+  });
+
+  it('forgets the handover when the window is rebuilt', async () => {
+    const e = await giveUp();
+    e.stop();
+    await e.start();
+    await vi.waitFor(() => expect(win().webContents.loads.filter((u) => u === INBOX).length).toBeGreaterThanOrEqual(4));
+  });
+});
+
 describe('EngineWindow guards', () => {
   const event = () => ({ preventDefault: vi.fn() });
 
   it('blocks navigation to foreign hosts and opens https ones externally', async () => {
     await readyEngine();
+    win().visible = true;
     const ev = event();
     win().webContents.emit('will-navigate', ev, 'https://evil.example/x');
     expect(ev.preventDefault).toHaveBeenCalled();
@@ -280,6 +328,15 @@ describe('EngineWindow guards', () => {
     const ok = event();
     win().webContents.emit('will-navigate', ok, 'https://www.instagram.com/direct/t/1/');
     expect(ok.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it('does not open links externally while the window is hidden', async () => {
+    await readyEngine();
+    expect(win().visible).toBe(false);
+    const ev = event();
+    win().webContents.emit('will-navigate', ev, 'https://evil.example/x');
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(h.state.opened).toEqual([]);
   });
 
   it('cancels foreign redirects without opening them', async () => {

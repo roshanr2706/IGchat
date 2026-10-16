@@ -92,6 +92,11 @@ export class EngineWindow implements EngineLike {
       webPreferences: { partition: ENGINE_PARTITION, sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false }
     });
     this.win = win;
+    this.handedOver = false;
+    this.gaveUp = false;
+    this.prevUrl = '';
+    this.curUrl = '';
+    this.redirects.reset();
     const wc = win.webContents;
     // Never open new windows; https links go to the user's browser.
     wc.setWindowOpenHandler(({ url }) => {
@@ -102,6 +107,8 @@ export class EngineWindow implements EngineLike {
     const guard = (event: { preventDefault(): void }, url: string): void => {
       if (isAllowedNavigation(url)) return;
       event.preventDefault();
+      // Only hand a link to the browser when the user is looking at this window and so probably clicked it.
+      if (!win.isVisible()) return;
       if (/^https:\/\//i.test(url)) void shell.openExternal(url);
     };
     wc.on('will-navigate', guard);
@@ -222,17 +229,26 @@ export class EngineWindow implements EngineLike {
       if (this.win.isVisible()) this.win.hide();
       this.setState('ready');
     } else if (kind === 'needsUser') {
+      // The user is working through an auth step, so an earlier give-up no longer applies.
       this.handedOver = true;
+      this.gaveUp = false;
+      this.redirects.reset();
       this.needsUserReason = reason ?? 'login';
       this.setState('needsUser');
       this.showForUser();
     } else if (this.handedOver) {
       // The user is mid-flow (password reset, "log in with Facebook"): leave navigation alone.
       // The one exception is the page Instagram lands on right after a successful login.
-      if (kind === 'goInbox' && !this.gaveUp && this.isPostLoginLanding(url)) {
+      if (kind === 'goInbox' && this.isPostLoginLanding(url)) {
         void this.isLoggedIn()
           .then((ok) => {
-            if (ok && this.handedOver && !this.gaveUp) this.redirectToInbox();
+            if (!ok || !this.handedOver) return;
+            // The user finished an auth step: start a fresh redirect budget instead of inheriting the exhausted one. A plain '/' landing keeps its budget so it can't loop.
+            if (this.cameFromAuth()) {
+              this.gaveUp = false;
+              this.redirects.reset();
+            }
+            this.redirectToInbox();
           })
           .catch(() => {});
       }
@@ -241,13 +257,28 @@ export class EngineWindow implements EngineLike {
     }
   }
 
-  /** The site root (any query), or an ordinary page reached straight from the login page. */
+  /**
+   * The page Instagram lands on after the user finishes an auth step: any ordinary page reached straight from a
+   * needsUser page (login, checkpoint, consent) or from Facebook/Meta ("Log in with Facebook"), or the site root
+   * (any query) unless redirect recovery already gave up. Account pages are never a landing.
+   */
   private isPostLoginLanding(url: string): boolean {
     try {
       const path = new URL(url).pathname;
-      if (path === '/') return true;
       if (path.startsWith('/accounts/')) return false;
-      return new URL(this.prevUrl).pathname.startsWith('/accounts/login');
+      if (this.cameFromAuth()) return true;
+      return path === '/' && !this.gaveUp;
+    } catch {
+      return false;
+    }
+  }
+
+  private cameFromAuth(): boolean {
+    if (!this.prevUrl) return false;
+    if (classifyEngineUrl(this.prevUrl).kind === 'needsUser') return true;
+    try {
+      const host = new URL(this.prevUrl).hostname;
+      return ['facebook.com', 'meta.com'].some((d) => host === d || host.endsWith('.' + d));
     } catch {
       return false;
     }
