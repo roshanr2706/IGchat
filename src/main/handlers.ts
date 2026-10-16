@@ -27,6 +27,8 @@ export function createHandlers({ service, settings, getWindow, themesDir }: Hand
     'thread:loadOlder': (threadId) => service.loadOlder(threadId),
     'thread:details': (threadId) => service.getThreadDetails(threadId),
     'thread:markSeen': (threadId) => service.markSeen(threadId),
+    'search:people': (query) => service.searchPeople(query),
+    'thread:openWithUser': (userId) => service.openThreadWithUser(userId),
     'msg:sendText': (threadId, text, replyToId, clientTempId) => service.sendText(threadId, text, replyToId, clientTempId),
     'msg:sendImage': (threadId, bytes, mime, clientTempId) => service.sendImage(threadId, bytes, mime, clientTempId),
     'msg:react': (threadId, messageId, emoji) => service.react(threadId, messageId, emoji),

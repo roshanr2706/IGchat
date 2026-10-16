@@ -43,6 +43,12 @@ class FakeEngine implements EngineLike {
   async navigateToThread(id: string): Promise<void> {
     this.navigated.push(id);
   }
+  userThreads: Record<string, string> = {};
+  opened: string[] = [];
+  async openUserThread(username: string): Promise<string | null> {
+    this.opened.push(username);
+    return this.userThreads[username] ?? null;
+  }
   async attachImage(threadId: string, filePath: string): Promise<void> {
     this.onAttach(threadId, filePath);
   }
@@ -626,5 +632,84 @@ describe('IgChatService live data', () => {
     expect(await svc.authStatus()).toEqual({ loggedIn: true, engine: 'ready' });
     svc.setFocused(false);
     expect(svc.isFocused).toBe(false);
+  });
+});
+
+const searchResult = (users: unknown[]) => ({ xfb_combinedIGSearchQuery: { search_messenger_contact_v2: users } });
+
+describe('IgChatService people search', () => {
+  beforeEach(async () => {
+    await svc.getInbox();
+  });
+
+  it('searches Instagram for people', async () => {
+    exec.handlers[OPS.search] = (v) => {
+      expect(v).toEqual({ search_text: 'alex' });
+      return searchResult([{ pk: '9000000002', username: 'alex_r', full_name: 'Alex Rivera', profile_pic_url: 'https://scontent.cdninstagram.com/a.jpg', is_verified: false }, { username: 'no-id' }]);
+    };
+    const people = await svc.searchPeople('alex');
+    expect(people).toEqual([expect.objectContaining({ id: '9000000002', username: 'alex_r' })]);
+    expect(await svc.searchPeople(' ')).toEqual([]);
+  });
+
+  it('opens an existing DM with a person without navigating', async () => {
+    const t = await svc.openThreadWithUser('9000000002');
+    expect(t.id).toBe(T1);
+    expect(engine.navigated).toEqual([]);
+    expect(engine.opened).toEqual([]);
+  });
+
+  it('opens a DM it did not know through the page, creating a placeholder thread', async () => {
+    exec.handlers[OPS.search] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend', is_verified: false }]);
+    await svc.searchPeople('new');
+    engine.userThreads.new_friend = '1000000000000077';
+    const t = await svc.openThreadWithUser('9000000077');
+    expect(t).toMatchObject({ id: '1000000000000077', title: 'New Friend', isGroup: false });
+    expect(t.participants.map((p) => p.username)).toEqual(['new_friend']);
+    expect((await svc.getThreadDetails('1000000000000077')).id).toBe('1000000000000077');
+  });
+
+  it('fails clearly when the person is unknown or Instagram cannot open the chat', async () => {
+    await expect(svc.openThreadWithUser('nobody')).rejects.toMatchObject({ code: 'NotFound' });
+    exec.handlers[OPS.search] = () => searchResult([{ pk: '9000000088', username: 'ghost', full_name: '' }]);
+    await svc.searchPeople('ghost');
+    await expect(svc.openThreadWithUser('9000000088')).rejects.toMatchObject({ code: 'Unknown' });
+  });
+
+  it('does not navigate the page while an image is being handed over', async () => {
+    exec.handlers[OPS.search] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend' }]);
+    await svc.searchPeople('new');
+    let release: () => void = () => {};
+    let attaching = false;
+    engine.attachImage = () =>
+      new Promise<void>((r) => {
+        attaching = true;
+        release = r;
+      });
+    const sent = svc.sendImage(T1, new Uint8Array([1]), 'image/png').catch(() => {});
+    await expect(svc.openThreadWithUser('9000000077')).rejects.toMatchObject({ code: 'EngineNotReady' });
+    expect(engine.opened).toEqual([]);
+    await vi.waitFor(() => expect(attaching).toBe(true));
+    release();
+    await sent;
+  });
+
+  it('keeps later real-thread ingestion working after a placeholder', async () => {
+    exec.handlers[OPS.search] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend' }]);
+    await svc.searchPeople('new');
+    engine.userThreads.new_friend = '1000000000000077';
+    await svc.openThreadWithUser('9000000077');
+    const seen: string[] = [];
+    svc.on('inbox:updated', (ts) => seen.push(...ts.map((t) => t.id)));
+    store.ingestThreads([{ id: '1000000000000077', thread_fbid: '1000000000000077', thread_title: 'Real Title', is_group: false, users: [] }]);
+    expect(seen).toEqual(['1000000000000077']);
+    expect(store.thread('1000000000000077')?.title).toBe('Real Title');
+  });
+
+  it('shares one request between identical concurrent searches', async () => {
+    exec.handlers[OPS.search] = () => searchResult([{ pk: '9000000077', username: 'new_friend' }]);
+    const [a, b] = await Promise.all([svc.searchPeople('new'), svc.searchPeople('new ')]);
+    expect(a).toEqual(b);
+    expect(exec.calls.filter((c) => c.name === OPS.search)).toHaveLength(1);
   });
 });

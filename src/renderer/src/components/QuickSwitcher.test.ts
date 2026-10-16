@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeThread, makeUser } from '../../../shared/test/factories';
 import { setBridge } from '../lib/api';
 import { createFakeBridge } from '../lib/fakeBridge';
@@ -60,5 +60,32 @@ describe('QuickSwitcher', () => {
     render(QuickSwitcher);
     await user.keyboard('zzzz');
     expect(screen.getByText(/No conversations match/)).toBeTruthy();
+  });
+});
+
+describe('QuickSwitcher people search', () => {
+  it('shows Instagram people after a pause and opens their chat', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const newThread = makeThread({ id: 'tn', title: 'New Friend', participants: [makeUser({ id: 'un', username: 'new_friend', fullName: 'New Friend' })] });
+    const fake = createFakeBridge({
+      'thread:open': () => ({ messages: [], hasOlder: false }),
+      'thread:markSeen': () => undefined,
+      'session:setActiveThread': () => undefined,
+      'search:people': (q) => (q === 'new' ? [makeUser({ id: 'un', username: 'new_friend', fullName: 'New Friend' }), makeUser({ id: alex.id, username: 'alex_r' })] : []),
+      'thread:openWithUser': () => newThread
+    });
+    setBridge(fake);
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    render(QuickSwitcher);
+    await user.keyboard('new');
+    expect(screen.queryByText('People')).toBeNull();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(await screen.findByText('People')).toBeTruthy();
+    // People who already have a loaded DM are not repeated.
+    expect(screen.queryByText('@alex_r', { selector: '.person .sub' })).toBeNull();
+    await user.click(screen.getByText('New Friend'));
+    await vi.waitFor(() => expect(inbox.activeId).toBe('tn'));
+    expect(fake.calls.filter((c) => c.channel === 'search:people').map((c) => c.args[0])).toEqual(['new']);
+    vi.useRealTimers();
   });
 });

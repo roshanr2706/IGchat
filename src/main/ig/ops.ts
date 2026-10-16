@@ -4,7 +4,8 @@ export const OPS = {
   sendText: 'IGDirectTextSendMutation',
   edit: 'IGDirectEditMessageMutation',
   unsend: 'IGDMessageUnsendDialogOffMsysMutation',
-  react: 'IGDirectReactionSendMutation'
+  react: 'IGDirectReactionSendMutation',
+  search: 'IGDOmniPickerSearchResultsListQuery'
 } as const;
 
 type Raw = Record<string, unknown>;
@@ -104,4 +105,12 @@ export function extractReactions(data: unknown): unknown[] | null {
 /** 19-digit client id Instagram uses to match a send with its echo (13-digit ms time + 6 random digits). */
 export function generateOtid(now: number = Date.now(), rand: () => number = Math.random): string {
   return `${Math.floor(now)}${String(Math.floor(rand() * 1_000_000)).padStart(6, '0')}`.slice(0, 19).padEnd(19, '0');
+}
+
+export function searchVars(text: string) {
+  return { search_text: text };
+}
+
+export function extractSearchUsers(data: unknown): unknown[] {
+  return arr(obj(obj(data)?.xfb_combinedIGSearchQuery)?.search_messenger_contact_v2);
 }

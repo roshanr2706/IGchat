@@ -20,6 +20,10 @@ export interface ChatService {
   loadOlder(threadId: string): Promise<ThreadPage>;
   getThreadDetails(threadId: string): Promise<Thread>;
   markSeen(threadId: string): Promise<void>;
+  /** People search (Instagram's own search when available). */
+  searchPeople(query: string): Promise<User[]>;
+  /** The 1:1 conversation with this person, opening it on Instagram's side if needed. */
+  openThreadWithUser(userId: string): Promise<Thread>;
   sendText(threadId: string, text: string, replyToId: string | null, clientTempId?: string): Promise<Message>;
   sendImage(threadId: string, bytes: Uint8Array, mime: string, clientTempId?: string): Promise<Message>;
   react(threadId: string, messageId: string, emoji: string): Promise<Message>;

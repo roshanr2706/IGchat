@@ -173,6 +173,22 @@ export class MockChatService implements ChatService {
     this.refreshPreview(threadId);
   }
 
+  async searchPeople(query: string): Promise<User[]> {
+    await this.delay();
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const users = new Map<string, User>();
+    for (const t of this.threads.values()) for (const u of t.participants) users.set(u.id, u);
+    return clone([...users.values()].filter((u) => u.username.toLowerCase().includes(q) || u.fullName.toLowerCase().includes(q)));
+  }
+
+  async openThreadWithUser(userId: string): Promise<Thread> {
+    await this.delay();
+    const t = [...this.threads.values()].find((x) => !x.isGroup && x.participants[0]?.id === userId);
+    if (!t) throw new ServiceError('NotFound', 'No conversation with that person');
+    return clone(t);
+  }
+
   setActiveThread(_threadId: string | null): void {}
 
   setFocused(_focused: boolean): void {}

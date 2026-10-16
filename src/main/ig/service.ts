@@ -9,8 +9,8 @@ import type { RelayStatus } from '../engine/relayFeed';
 import type { EngineLike, GraphQLObservation, RelayDelta, RelaySnapshot } from '../engine/types';
 import { normalizeUser } from './normalize';
 import {
-  editVars, extractEditResult, extractMessageListPage, extractReactions, extractSendResult, extractThreadListPage, extractUnsendResult,
-  generateOtid, messageListVars, OPS, reactVars, sendTextVars, threadListVars, unsendVars
+  editVars, extractEditResult, extractMessageListPage, extractReactions, extractSearchUsers, extractSendResult, extractThreadListPage, extractUnsendResult,
+  generateOtid, messageListVars, OPS, reactVars, searchVars, sendTextVars, threadListVars, unsendVars
 } from './ops';
 import type { IgStore } from './store';
 
@@ -47,6 +47,7 @@ const ECHO_SKEW_MS = 5_000;
 const MAX_TRACKED = 200;
 const IMAGE_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
 const POLL_MS = 100;
+const MAX_SEARCH_CHARS = 100;
 
 const messageIdOf = (node: unknown): string | undefined => {
   const r = node && typeof node === 'object' ? (node as Record<string, unknown>) : null;
@@ -70,6 +71,7 @@ export class IgChatService implements ChatService {
   private readonly imageWatchers = new Map<string, Set<() => void>>();
   private readonly claimedImages = new Set<string>();
   private readonly deferred = new Set<() => void>();
+  private readonly searches = new Map<string, Promise<User[]>>();
 
   constructor(private readonly deps: IgServiceDeps) {}
 
@@ -290,6 +292,75 @@ export class IgChatService implements ChatService {
 
   /** Instagram's page marks a thread read itself when it is opened (see openThread), as a browser would. */
   async markSeen(_threadId: string): Promise<void> {}
+
+  async searchPeople(query: string): Promise<User[]> {
+    const text = query.trim().slice(0, MAX_SEARCH_CHARS);
+    if (!text) return [];
+    // Identical searches in flight share one request; search is read-only, so any failure is just an error.
+    const running = this.searches.get(text);
+    if (running) return running;
+    const p = this.runSearch(text).finally(() => {
+      if (this.searches.get(text) === p) this.searches.delete(text);
+    });
+    this.searches.set(text, p);
+    return p;
+  }
+
+  private async runSearch(text: string): Promise<User[]> {
+    await this.ready();
+    const users = extractSearchUsers(await this.deps.exec.run(OPS.search, searchVars(text)))
+      .map((raw) => normalizeUser(raw)?.user)
+      .filter((u): u is User => !!u && !!u.username);
+    users.forEach((u) => this.store.rememberUser(u));
+    return users;
+  }
+
+  async openThreadWithUser(userId: string): Promise<Thread> {
+    const existing = this.store.dmThreadWith(userId);
+    if (existing) return existing;
+    const user = this.store.knownUser(userId);
+    if (!user) throw new ServiceError('NotFound', 'Search for this person first');
+    await this.ready();
+    // The page must not be moved while an image is being handed to it.
+    if (this.imageBusy > 0) throw new ServiceError('EngineNotReady', 'Instagram is busy right now, try again in a moment');
+    // Held like an image send: later image sends queue behind this navigation and background navigation stays off.
+    this.imageBusy++;
+    const run = this.imageQueue.then(() => this.openUserThreadNow(user));
+    this.imageQueue = run
+      .then(() => {}, () => {})
+      .then(() => {
+        if (--this.imageBusy === 0 && this.activeThreadId) this.navigate(this.activeThreadId);
+      });
+    return run;
+  }
+
+  private async openUserThreadNow(user: User): Promise<Thread> {
+    const known = this.store.dmThreadWith(user.id);
+    if (known) return known;
+    await this.ready();
+    const threadId = await this.deps.engine.openUserThread(user.username);
+    if (!threadId) throw new ServiceError('Unknown', `Couldn't open a chat with @${user.username}`);
+    // The relay may deliver the real record under the id the page used or one we can match by person.
+    const arrived = (): Thread | undefined => this.store.thread(threadId) ?? this.store.dmThreadWith(user.id);
+    await this.waitFor(() => !!arrived(), this.timeout('openThread'));
+    if (!arrived()) {
+      this.store.addPlaceholderThread({
+        id: threadId,
+        title: user.fullName || user.username,
+        isGroup: false,
+        participants: [user],
+        adminIds: [],
+        lastActivityAt: this.now(),
+        lastMessagePreview: '',
+        unread: false,
+        muted: false,
+        avatarUrls: user.avatarUrl ? [user.avatarUrl] : []
+      });
+    }
+    const thread = arrived()!;
+    this.activeThreadId = thread.id;
+    return thread;
+  }
 
   async sendText(threadId: string, text: string, replyToId: string | null, clientTempId?: string): Promise<Message> {
     await this.ready();

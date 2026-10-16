@@ -18,6 +18,8 @@ export interface InvokeMap {
   'thread:loadOlder': (threadId: string) => ThreadPage;
   'thread:details': (threadId: string) => Thread;
   'thread:markSeen': (threadId: string) => void;
+  'search:people': (query: string) => User[];
+  'thread:openWithUser': (userId: string) => Thread;
   'msg:sendText': (threadId: string, text: string, replyToId: string | null, clientTempId: string) => Message;
   'msg:sendImage': (threadId: string, bytes: Uint8Array, mime: string, clientTempId: string) => Message;
   'msg:react': (threadId: string, messageId: string, emoji: string) => Message;
@@ -57,6 +59,8 @@ export const INVOKE_CHANNELS = [
   'thread:loadOlder',
   'thread:details',
   'thread:markSeen',
+  'search:people',
+  'thread:openWithUser',
   'msg:sendText',
   'msg:sendImage',
   'msg:react',

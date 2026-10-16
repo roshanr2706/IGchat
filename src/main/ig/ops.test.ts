@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import threadList from './__fixtures__/threadList.json';
 import messageList from './__fixtures__/messageList.json';
 import {
-  editVars, extractEditResult, extractMessageListPage, extractReactions, extractSendResult, extractThreadListPage, extractUnsendResult,
-  generateOtid, messageListVars, OPS, reactVars, sendTextVars, threadListVars, unsendVars
+  editVars, extractEditResult, extractMessageListPage, extractReactions, extractSearchUsers, extractSendResult, extractThreadListPage, extractUnsendResult,
+  generateOtid, messageListVars, OPS, reactVars, searchVars, sendTextVars, threadListVars, unsendVars
 } from './ops';
 
 describe('ops', () => {
@@ -14,7 +14,8 @@ describe('ops', () => {
       sendText: 'IGDirectTextSendMutation',
       edit: 'IGDirectEditMessageMutation',
       unsend: 'IGDMessageUnsendDialogOffMsysMutation',
-      react: 'IGDirectReactionSendMutation'
+      react: 'IGDirectReactionSendMutation',
+      search: 'IGDOmniPickerSearchResultsListQuery'
     });
   });
 
@@ -46,5 +47,11 @@ describe('ops', () => {
   it('generates 19-digit offline threading ids', () => {
     expect(generateOtid(1792100000000, () => 0.123456)).toBe('1792100000000123456');
     expect(generateOtid()).toMatch(/^\d{19}$/);
+  });
+  it('builds and reads the people search', () => {
+    expect(OPS.search).toBe('IGDOmniPickerSearchResultsListQuery');
+    expect(searchVars('alex')).toEqual({ search_text: 'alex' });
+    expect(extractSearchUsers({ xfb_combinedIGSearchQuery: { search_messenger_contact_v2: [{ pk: '1' }, { pk: '2' }] } })).toHaveLength(2);
+    expect(extractSearchUsers(null)).toEqual([]);
   });
 });

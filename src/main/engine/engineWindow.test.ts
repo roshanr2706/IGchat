@@ -226,6 +226,54 @@ describe('EngineWindow thread navigation', () => {
   });
 });
 
+describe('EngineWindow opening a DM by username', () => {
+  const DM = 'https://www.instagram.com/direct/t/333/';
+
+  it('follows ig.me, lands on the thread, and does not reload the inbox on the hop', async () => {
+    const e = await readyEngine();
+    const wc = win().webContents;
+    wc.loads.length = 0;
+    wc.nextUrl = (u) => (u.startsWith('https://ig.me/') ? 'https://ig.me/m/alex.r' : u);
+    wc.onLoaded = (u, w) => {
+      if (u.startsWith('https://ig.me/')) {
+        w.url = DM;
+        w.emit('did-navigate', {}, DM);
+      }
+    };
+    await expect(e.openUserThread('alex.r')).resolves.toBe('333');
+    await flush();
+    expect(wc.loads).toEqual(['https://ig.me/m/alex.r']);
+    expect(e.state).toBe('ready');
+  });
+
+  it('rejects usernames that are not plain handles, without loading anything', async () => {
+    const e = await readyEngine();
+    const wc = win().webContents;
+    wc.loads.length = 0;
+    for (const bad of ['', 'a/b', 'a b', '../x', 'x?y=1', 'a'.repeat(31), 'a%2Fb']) await expect(e.openUserThread(bad)).resolves.toBeNull();
+    expect(wc.loads).toEqual([]);
+  });
+
+  it('returns null when the engine is not ready or never reaches a thread', async () => {
+    const idle = new EngineWindow({ sleep: instant });
+    await expect(idle.openUserThread('alex')).resolves.toBeNull();
+    const e = await readyEngine();
+    win().webContents.nextUrl = () => 'https://www.instagram.com/';
+    await expect(e.openUserThread('alex')).resolves.toBeNull();
+  });
+
+  it('does not mistake the thread it was already on for the result', async () => {
+    const e = await readyEngine();
+    const wc = win().webContents;
+    wc.url = DM;
+    wc.nextUrl = () => DM;
+    wc.loadURL = async () => {
+      throw new Error('ERR_ABORTED');
+    };
+    await expect(e.openUserThread('alex')).resolves.toBeNull();
+  });
+});
+
 describe('EngineWindow handover to the user', () => {
   const LOGIN = 'https://www.instagram.com/accounts/login/';
   const nav = async (url: string): Promise<void> => {

@@ -33,6 +33,8 @@ export interface EngineLike {
   showForUser(): void;
   logout(): Promise<void>;
   navigateToThread(threadId: string): Promise<void>;
+  /** Follows Instagram's own ig.me link for a username; resolves to the DM thread id it lands on, or null. */
+  openUserThread(username: string): Promise<string | null>;
   attachImage(threadId: string, filePath: string): Promise<void>;
   isLoggedIn(): Promise<boolean>;
 }

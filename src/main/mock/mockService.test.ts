@@ -176,4 +176,11 @@ describe('MockChatService', () => {
     expect(() => svc.setActiveThread(t.id)).not.toThrow();
     expect(() => svc.setFocused(false)).not.toThrow();
   });
+  it('searches people and opens their DM', async () => {
+    const people = await svc.searchPeople('alex');
+    expect(people.map((p) => p.username)).toEqual(['alex_r']);
+    const thread = await svc.openThreadWithUser(people[0]!.id);
+    expect(thread.participants.map((p) => p.id)).toEqual([people[0]!.id]);
+    await expect(svc.openThreadWithUser('nobody')).rejects.toMatchObject({ code: 'NotFound' });
+  });
 });

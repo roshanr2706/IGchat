@@ -1,5 +1,7 @@
 <script lang="ts">
+  import type { User } from '../../../shared/types';
   import { openThread } from '../lib/actions';
+  import { call } from '../lib/api';
   import { searchThreads } from '../lib/fuzzy';
   import { inbox } from '../stores/inbox.svelte';
   import { ui } from '../stores/ui.svelte';
@@ -10,10 +12,49 @@
   let input: HTMLInputElement | undefined = $state();
 
   const results = $derived(searchThreads(inbox.threads, query, 12));
+  let people = $state<User[]>([]);
+  let searchSeq = 0;
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  const knownDmUserIds = $derived(new Set(inbox.threads.filter((t) => !t.isGroup).map((t) => t.participants[0]?.id)));
+  const newPeople = $derived(people.filter((p) => !knownDmUserIds.has(p.id)));
+
+  function scheduleSearch(): void {
+    if (searchTimer) clearTimeout(searchTimer);
+    const q = query.trim();
+    const seq = ++searchSeq;
+    if (q.length < 2) {
+      people = [];
+      return;
+    }
+    searchTimer = setTimeout(() => {
+      void call('search:people', q)
+        .then((found) => {
+          if (seq === searchSeq) people = found;
+        })
+        .catch(() => {});
+    }, 300);
+  }
+
+  async function choosePerson(userId: string): Promise<void> {
+    close();
+    try {
+      const thread = await call('thread:openWithUser', userId);
+      inbox.applyUpdates([thread]);
+      openThread(thread.id);
+    } catch {
+      ui.toast("Couldn't open that chat");
+    }
+  }
+
   const activeOption = $derived(results[index] ? `sw-${results[index].id}` : undefined);
 
   $effect(() => {
     input?.focus();
+  });
+
+  $effect(() => () => {
+    searchSeq++;
+    if (searchTimer) clearTimeout(searchTimer);
   });
 
   function close(): void {
@@ -45,7 +86,10 @@
     <input
       bind:this={input}
       bind:value={query}
-      oninput={() => (index = 0)}
+      oninput={() => {
+        index = 0;
+        scheduleSearch();
+      }}
       onkeydown={onKeydown}
       placeholder="Where would you like to go?"
       aria-label="Search conversations"
@@ -66,8 +110,22 @@
           </li>
         {/each}
       </ul>
-    {:else}
+    {:else if !newPeople.length}
       <p class="none">No conversations match “{query}”.</p>
+    {/if}
+    {#if newPeople.length}
+      <div class="section">People</div>
+      <ul role="listbox" aria-label="People">
+        {#each newPeople as p (p.id)}
+          <li role="option" aria-selected="false">
+            <button class="person" tabindex="-1" onclick={() => void choosePerson(p.id)}>
+              <Avatar urls={p.avatarUrl ? [p.avatarUrl] : []} name={p.fullName || p.username} size={24} />
+              <span class="title">{p.fullName || p.username}</span>
+              <span class="sub">@{p.username}</span>
+            </button>
+          </li>
+        {/each}
+      </ul>
     {/if}
     <footer>
       <span><kbd>↑</kbd> <kbd>↓</kbd> navigate</span>
@@ -118,7 +176,8 @@
     overflow-y: auto;
     list-style: none;
   }
-  li button {
+  li button,
+  .person {
     width: 100%;
     display: flex;
     align-items: center;

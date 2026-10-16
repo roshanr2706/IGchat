@@ -56,3 +56,12 @@ export class RedirectPolicy {
     this.stamps = [];
   }
 }
+
+export function threadIdFromUrl(url: string): string | null {
+  try {
+    const m = /^\/direct\/t\/([^/]+)\/?/.exec(new URL(url).pathname);
+    return m ? decodeURIComponent(m[1]!) : null;
+  } catch {
+    return null;
+  }
+}

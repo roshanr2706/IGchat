@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyEngineUrl, isAllowedNavigation, RedirectPolicy } from './urlState';
+import { classifyEngineUrl, isAllowedNavigation, RedirectPolicy, threadIdFromUrl } from './urlState';
 
 describe('classifyEngineUrl', () => {
   it('recognizes the DM app as ready', () => {
@@ -76,5 +76,13 @@ describe('RedirectPolicy', () => {
     p.record();
     t = 61_000;
     expect(p.record()).toEqual({ action: 'reload', delayMs: 1000 });
+  });
+});
+
+describe('threadIdFromUrl', () => {
+  it('reads the thread id from a DM url', () => {
+    expect(threadIdFromUrl('https://www.instagram.com/direct/t/1000000000000001/')).toBe('1000000000000001');
+    expect(threadIdFromUrl('https://www.instagram.com/direct/inbox/')).toBeNull();
+    expect(threadIdFromUrl('nope')).toBeNull();
   });
 });

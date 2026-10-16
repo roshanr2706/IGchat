@@ -9,6 +9,7 @@ export type RemovalCandidate = { threadId: string; messageId: string; timestamp:
 
 const MAX_REMOVED = 2000;
 const MAX_ORPHANS = 500;
+const MAX_KNOWN_USERS = 500;
 const byTime = (a: Message, b: Message): number => a.timestamp - b.timestamp;
 const sameContent = (a: Message, b: Message): boolean => JSON.stringify({ ...a, clientTempId: undefined }) === JSON.stringify({ ...b, clientTempId: undefined });
 const field = (raw: unknown, key: string): string | undefined => {
@@ -30,6 +31,7 @@ export class IgStore {
   private orphans: { fbid: string; key: string; raw: unknown; silent: boolean }[] = [];
   private readonly recentlyRemoved = new Set<string>();
   private readonly pendingByOtid = new Map<string, string>();
+  private readonly knownUsers = new Map<string, User>();
 
   setViewer(user: User, fbid: string | null): void {
     this.viewer = user;
@@ -43,7 +45,7 @@ export class IgStore {
   clear(): void {
     this.viewer = null;
     this.viewerFbid = null;
-    for (const m of [this.threadsById, this.threadIdByFbid, this.igidByFbid, this.messagesByThread, this.itemIndex, this.itemIdByMessage, this.pendingByOtid, this.recentlyRemoved]) m.clear();
+    for (const m of [this.threadsById, this.threadIdByFbid, this.igidByFbid, this.messagesByThread, this.itemIndex, this.itemIdByMessage, this.pendingByOtid, this.recentlyRemoved, this.knownUsers]) m.clear();
     this.orphans = [];
   }
 
@@ -245,6 +247,30 @@ export class IgStore {
     const next = { ...m, reactions: normalizeReactions(raws, this.context(threadId)) };
     this.bucket(threadId).set(messageId, next);
     return next;
+  }
+
+  rememberUser(user: User): void {
+    this.knownUsers.set(user.id, user);
+    if (this.knownUsers.size > MAX_KNOWN_USERS) this.knownUsers.delete(this.knownUsers.keys().next().value!);
+  }
+
+  knownUser(id: string): User | undefined {
+    return this.knownUsers.get(id) ?? this.threads().flatMap((t) => t.participants).find((p) => p.id === id);
+  }
+
+  dmThreadWith(userId: string): Thread | undefined {
+    return this.threads().find((t) => !t.isGroup && t.participants.length === 1 && t.participants[0]!.id === userId);
+  }
+
+  /**
+   * A minimal thread for a DM the page just opened, until the relay delivers the real record. Silent (the caller
+   * returns it directly). A later real record with the same id replaces it and is announced as an ordinary change.
+   */
+  addPlaceholderThread(thread: Thread): void {
+    if (this.threadsById.has(thread.id) || this.threadIdByFbid.has(thread.id)) return;
+    this.threadsById.set(thread.id, { thread, fbid: thread.id, threadKey: '', viewerWatermark: 0 });
+    this.threadIdByFbid.set(thread.id, thread.id);
+    this.replayOrphans();
   }
 
   private bucket(threadId: string): Map<string, Message> {

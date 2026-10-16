@@ -4,7 +4,7 @@ import { ServiceError } from '../chatService';
 import { Emitter } from '../emitter';
 import { CLICK_SEND_SCRIPT, clickThreadLinkScript, pathMatchesThread, setFileOnPageInput, threadPathFor, waitForThreadUrl } from './pageScripts';
 import type { CdpLike, EngineLike, PageLike } from './types';
-import { classifyEngineUrl, isAllowedNavigation, RedirectPolicy } from './urlState';
+import { classifyEngineUrl, isAllowedNavigation, RedirectPolicy, threadIdFromUrl } from './urlState';
 
 export const ENGINE_PARTITION = 'persist:ig';
 export const ENGINE_START_URL = 'https://www.instagram.com/direct/inbox/';
@@ -12,6 +12,9 @@ export const ENGINE_START_URL = 'https://www.instagram.com/direct/inbox/';
 const THREAD_NAV_TIMEOUT_MS = 8000;
 const RESPONSIVE_GRACE_MS = 10_000;
 const READY_SETTLE_MS = 3000;
+const USER_THREAD_TIMEOUT_MS = 12_000;
+/** Instagram handles: letters, digits, dots and underscores, at most 30. Anything else never reaches a URL. */
+const USERNAME_RE = /^[A-Za-z0-9._]{1,30}$/;
 
 export function cdpFromDebugger(dbg: Debugger): CdpLike {
   return {
@@ -48,6 +51,8 @@ export class EngineWindow implements EngineLike {
   private unresponsive: ReturnType<typeof setTimeout> | null = null;
   private starting: Promise<void> | null = null;
   private redirecting = false;
+  /** True while openUserThread follows an ig.me link: the hops through ig.me are not bounces and must not reload the inbox. */
+  private followingLink = false;
   /** Hard ceiling on automatic inbox reloads that no navigation can reset: only an explicit start() or logout() does. */
   private readonly bounceCap = new RedirectPolicy(6, 10 * 60_000);
   private readyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -189,6 +194,46 @@ export class EngineWindow implements EngineLike {
     }
   }
 
+  /**
+   * Follows Instagram's own ig.me link for a username (as a browser click would) and returns the DM thread id it lands
+   * on. Returns null for an invalid username, a page that is not ready, or when the thread isn't reached in time.
+   */
+  async openUserThread(username: string): Promise<string | null> {
+    const win = this.win;
+    if (!win || this.state !== 'ready' || !USERNAME_RE.test(username) || this.followingLink) return null;
+    this.followingLink = true;
+    const before = this.page.url();
+    try {
+      let loaded = true;
+      // ig.me redirects to instagram.com (an allowed host), so the redirect guard lets it through. Bounded in case the load hangs.
+      let cap: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        win.webContents.loadURL(`https://ig.me/m/${username}`).catch(() => {
+          loaded = false;
+        }),
+        new Promise<void>((resolve) => {
+          cap = setTimeout(() => {
+            loaded = false;
+            resolve();
+          }, USER_THREAD_TIMEOUT_MS);
+        })
+      ]).finally(() => clearTimeout(cap));
+      for (let waited = 0; waited <= USER_THREAD_TIMEOUT_MS; waited += 250) {
+        if (this.win !== win) return null;
+        const url = this.page.url();
+        const id = threadIdFromUrl(url);
+        // A failed load that left us on the thread we were already viewing is not an answer.
+        if (id && (loaded || url !== before)) return id;
+        await this.sleep(250);
+      }
+      return null;
+    } finally {
+      this.followingLink = false;
+      // Look at where we ended up; a failed hop is recovered by the normal (capped) redirect policy.
+      if (this.win === win) this.onUrl();
+    }
+  }
+
   async attachImage(threadId: string, filePath: string): Promise<void> {
     await this.navigateToThread(threadId);
     await this.sleep(800);
@@ -254,6 +299,8 @@ export class EngineWindow implements EngineLike {
       this.needsUserReason = reason ?? 'login';
       this.setState('needsUser');
       this.showForUser();
+    } else if (this.followingLink) {
+      // openUserThread is mid-hop (ig.me -> instagram.com -> the thread); it re-checks the page when it finishes.
     } else if (this.handedOver) {
       // The user is mid-flow (password reset, "log in with Facebook"): leave navigation alone, except for the landing page.
       if (kind === 'goInbox' && this.isPostLoginLanding(url)) {
