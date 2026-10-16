@@ -477,6 +477,23 @@ describe('IgChatService writes', () => {
     s.stop();
   });
 
+  it('releases the image queue and navigation after the hold cap when an attach never settles', async () => {
+    let attaches = 0;
+    engine.attachImage = () => {
+      attaches++;
+      return new Promise<void>(() => {});
+    };
+    const s = mk({ timeouts: { attach: 20, imageEcho: 50, maybeGrace: 60_000, attachHold: 150 } });
+    s.setActiveThread(T1);
+    engine.navigated.length = 0;
+    await expect(s.sendImage(T1, new Uint8Array([1]), 'image/png', 'temp-a')).rejects.toMatchObject({ code: 'MaybeSent' });
+    const second = s.sendImage(T1, new Uint8Array([1]), 'image/png', 'temp-b');
+    await vi.waitFor(() => expect(attaches).toBe(2), { timeout: 2000 });
+    await expect(second).rejects.toMatchObject({ code: 'MaybeSent' });
+    await vi.waitFor(() => expect(engine.navigated).toContain(T1), { timeout: 2000 });
+    s.stop();
+  });
+
   it('does not navigate the page while an image is being handed over, and navigates once it is done', async () => {
     let release!: () => void;
     let started = false;

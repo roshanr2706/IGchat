@@ -38,10 +38,10 @@ export type IgServiceDeps = {
   tmpDir: string;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
-  timeouts?: Partial<{ ready: number; openThread: number; imageEcho: number; sendEcho: number; maybeGrace: number; attach: number }>;
+  timeouts?: Partial<{ ready: number; openThread: number; imageEcho: number; sendEcho: number; maybeGrace: number; attach: number; attachHold: number }>;
 };
 
-const TIMEOUTS = { ready: 20_000, openThread: 4_000, imageEcho: 30_000, sendEcho: 20_000, maybeGrace: 120_000, attach: 30_000 };
+const TIMEOUTS = { ready: 20_000, openThread: 4_000, imageEcho: 30_000, sendEcho: 20_000, maybeGrace: 120_000, attach: 30_000, attachHold: 180_000 };
 /** An echo may carry a timestamp slightly before our clock says the send started. */
 const ECHO_SKEW_MS = 5_000;
 const MAX_TRACKED = 200;
@@ -389,7 +389,15 @@ export class IgChatService implements ChatService {
       // attachImage throws only before the file is handed to the page (safe to report, definite failure). Once it
       // resolves, or the deadline passes with the outcome unknown, only the echo decides, and a missing echo is MaybeSent.
       const attach = this.deps.engine.attachImage(threadId, file);
-      hold.settled = attach.then(() => {}, () => {});
+      // Bounded: if the engine never answers, releasing the queue after a few minutes is the lesser risk.
+      let holdTimer: ReturnType<typeof setTimeout> | undefined;
+      hold.settled = Promise.race([
+        attach.then(() => {}, () => {}),
+        new Promise<void>((resolve) => {
+          holdTimer = setTimeout(resolve, this.timeout('attachHold'));
+          (holdTimer as { unref?: () => void }).unref?.();
+        })
+      ]).finally(() => clearTimeout(holdTimer));
       let deadline: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([attach, new Promise<void>((resolve) => (deadline = setTimeout(resolve, this.timeout('attach'))))]);
@@ -406,6 +414,7 @@ export class IgChatService implements ChatService {
       const finish = this.defer(this.timeout('maybeGrace'), () => {
         off();
         watchers.delete(finish);
+        if (!watchers.size && this.imageWatchers.get(threadId) === watchers) this.imageWatchers.delete(threadId);
       });
       watchers.add(finish);
       off = this.store.events.on('msg:new', (tid, msgs) => {
