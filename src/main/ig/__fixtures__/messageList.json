@@ -1,0 +1,26 @@
+{
+  "data": {
+    "fetch__SlideThread": {
+      "as_ig_direct_thread": {
+        "id": "1000000000000001",
+        "slide_messages": {
+          "edges": [
+            { "node": { "id": "item-1", "message_id": "mid.$m1", "thread_fbid": "1000000000000001", "sender_fbid": "900000000000001", "timestamp_ms": "1792090000000", "offline_threading_id": "7300000000000000001", "content_type": "TEXT", "text_body": "hey!", "content": { "__typename": "SlideMessageText", "text_body": "hey!" }, "reactions": [{ "reaction": "❤️", "sender_fbid": "900000000000002" }, { "reaction": "❤️", "sender_fbid": "900000000000001" }], "slide_edit_history": [{ "body": "hey", "timestamp_ms": "1792090060000" }] }, "cursor": "1" },
+            { "node": { "id": "item-2", "message_id": "mid.$m2", "thread_fbid": "1000000000000001", "sender_fbid": "900000000000002", "timestamp_ms": "1792090100000", "content_type": "TEXT", "text_body": "see you soon", "content": { "__typename": "SlideMessageText", "text_body": "see you soon" }, "replied_to_message": { "message_id": "mid.$m1", "sender_fbid": "900000000000001", "text_body": "hey!" } }, "cursor": "2" },
+            { "node": { "id": "item-3", "message_id": "mid.$m3", "thread_fbid": "1000000000000001", "sender_fbid": "900000000000002", "timestamp_ms": "1792090200000", "content_type": "IMAGES", "content": { "__typename": "SlideMessageImageContent", "attachments": [{ "attachment_cdn_url": "https://scontent.cdninstagram.com/v/photo.jpg", "preview_cdn_url": "https://scontent.cdninstagram.com/v/photo_s.jpg", "preview_width": 1080, "preview_height": 1350 }] } }, "cursor": "3" },
+            { "node": { "id": "item-4", "message_id": "mid.$m4", "thread_fbid": "1000000000000001", "sender_fbid": "900000000000002", "timestamp_ms": "1792090300000", "content_type": "MESSAGE_INLINE_SHARE", "content": { "__typename": "SlideMessageXMAContent", "xma_text_body": "look at this", "xma": { "__typename": "SlideMessagePortraitXMA", "header_title_text": "natgeo", "target_url": "https://www.instagram.com/reel/ABC123/", "preview_image": { "url": "https://scontent.cdninstagram.com/v/reel.jpg", "width": 640, "height": 1136 } } } }, "cursor": "4" },
+            { "node": { "id": "item-5", "message_id": "mid.$m5", "thread_fbid": "1000000000000001", "sender_fbid": "900000000000002", "timestamp_ms": "1792090400000", "content_type": "MESSAGE_INLINE_SHARE", "content": { "__typename": "SlideMessageXMAContent", "xma": { "__typename": "SlideMessageStandardXMA", "header_title_text": "nasa", "caption_body_text": "a galaxy", "target_url": "https://www.instagram.com/p/XYZ789/", "preview_image": { "url": "https://scontent.cdninstagram.com/v/post.jpg" } } } }, "cursor": "5" },
+            { "node": { "id": "item-6", "message_id": "mid.$m6", "thread_fbid": "1000000000000001", "sender_fbid": "900000000000002", "timestamp_ms": "1792090500000", "content_type": "MESSAGE_INLINE_SHARE", "content": { "__typename": "SlideMessageXMAContent", "xma_text_body": "https://example.com/article", "xma": { "__typename": "SlideMessageStandardXMA", "title_text": "An article", "target_url": "https://example.com/article" } } }, "cursor": "6" },
+            { "node": { "id": "item-7", "message_id": "mid.$m7", "thread_fbid": "1000000000000001", "sender_fbid": "900000000000002", "timestamp_ms": "1792090600000", "content_type": "REACTION_LOG_XMAT", "content": { "__typename": "SlideMessageAdminText", "is_reaction_action_log": true } }, "cursor": "7" },
+            { "node": { "id": "item-8", "message_id": "mid.$m8", "thread_fbid": "1000000000000001", "sender_fbid": "900000000000002", "timestamp_ms": "1792090700000", "content_type": "RAVEN_IMAGE", "content": { "__typename": "SlideMessageRavenImageContent" } }, "cursor": "8" },
+            { "node": { "id": "item-9", "message_id": "mid.$m9", "thread_fbid": "1000000000000001", "sender_fbid": "900000000000002", "timestamp_ms": "1792090800000", "content_type": "GROUP_THREAD_CREATED_XMAT", "text_body": "Alex created the group", "content": { "__typename": "SlideMessageAdminText", "is_reaction_action_log": false } }, "cursor": "9" },
+            { "node": { "id": "item-10", "message_id": "mid.$m10", "thread_fbid": "1000000000000001", "sender_fbid": "900000000000002", "timestamp_ms": "1792090900000", "content_type": "VIDEOS", "content": { "__typename": "SlideMessageVideosContent", "attachments": [{ "attachment_cdn_url": "https://scontent.cdninstagram.com/v/clip.mp4", "preview_cdn_url": "https://scontent.cdninstagram.com/v/clip.jpg", "preview_width": 720, "preview_height": 1280 }] } }, "cursor": "10" },
+            { "node": { "id": "item-11", "message_id": "mid.$m11", "thread_fbid": "1000000000000001", "sender_fbid": "900000000000002", "timestamp_ms": "1792091000000", "content_type": "SOMETHING_NEW", "content": { "__typename": "SlideMessageFutureContent" } }, "cursor": "11" },
+            { "node": { "id": "item-12", "message_id": "mid.$m12", "thread_fbid": "1000000000000001", "sender_fbid": "900000000000002", "timestamp_ms": "1792091100000", "content_type": "TEXT", "tombstone_reason": "UNSENT", "content": { "__typename": "SlideMessageText", "text_body": "gone" } }, "cursor": "12" }
+          ],
+          "page_info": { "end_cursor": "12", "has_next_page": true, "has_previous_page": false, "start_cursor": "1" }
+        }
+      }
+    }
+  }
+}

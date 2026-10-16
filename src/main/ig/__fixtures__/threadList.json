@@ -1,0 +1,73 @@
+{
+  "data": {
+    "fetch__SlideMailbox": {
+      "threads_by_folder": {
+        "edges": [
+          {
+            "node": {
+              "as_ig_direct_thread": {
+                "id": "1000000000000001",
+                "thread_id": "340282366841710300949128000000000000001",
+                "thread_fbid": "1000000000000001",
+                "thread_key": "200000000000001",
+                "thread_title": "",
+                "is_group": false,
+                "is_muted": false,
+                "marked_as_unread": false,
+                "last_activity_timestamp_ms": "1792100000000",
+                "viewer_id": "9000000001",
+                "viewer": { "id": "9000000001", "interop_messaging_user_fbid": "900000000000001", "profile_pic_url": "https://scontent.cdninstagram.com/v/me.jpg" },
+                "users": [
+                  { "id": "9000000002", "username": "alex_r", "full_name": "Alex Rivera", "is_verified": true, "profile_pic_url": "https://scontent.cdninstagram.com/v/alex.jpg", "interop_messaging_user_fbid": "900000000000002" }
+                ],
+                "slide_read_receipts": [
+                  { "participant_fbid": "900000000000001", "watermark_timestamp_ms": "1792099000000" },
+                  { "participant_fbid": "900000000000002", "watermark_timestamp_ms": "1792100000000" }
+                ],
+                "slide_messages": {
+                  "edges": [
+                    { "node": { "id": "item-2", "message_id": "mid.$m2", "sender_fbid": "900000000000002", "timestamp_ms": "1792100000000", "content_type": "TEXT", "igd_snippet": "see you soon", "text_body": "see you soon", "content": { "__typename": "SlideMessageText", "text_body": "see you soon" } }, "cursor": "c2" }
+                  ],
+                  "page_info": { "end_cursor": "c2", "has_next_page": true }
+                },
+                "thread_image_url": null
+              }
+            },
+            "cursor": "t1"
+          },
+          {
+            "node": {
+              "as_ig_direct_thread": {
+                "id": "1000000000000002",
+                "thread_id": "340282366841710300949128000000000000002",
+                "thread_fbid": "1000000000000002",
+                "thread_title": "weekend plans",
+                "is_group": true,
+                "is_muted": true,
+                "marked_as_unread": false,
+                "admin_user_ids": ["9000000001"],
+                "last_activity_timestamp_ms": "1792090000000",
+                "viewer_id": "9000000001",
+                "viewer": { "id": "9000000001", "interop_messaging_user_fbid": "900000000000001" },
+                "users": [
+                  { "id": "9000000002", "username": "alex_r", "full_name": "Alex Rivera", "is_verified": false, "profile_pic_url": "https://scontent.cdninstagram.com/v/alex.jpg", "interop_messaging_user_fbid": "900000000000002" },
+                  { "id": "9000000003", "username": "sam.kim", "full_name": "", "is_verified": false, "profile_pic_url": "https://evil.example.com/x.jpg", "interop_messaging_user_fbid": "900000000000003" }
+                ],
+                "slide_read_receipts": [{ "participant_fbid": "900000000000001", "watermark_timestamp_ms": "1792090000000" }],
+                "slide_messages": {
+                  "edges": [
+                    { "node": { "id": "item-9", "message_id": "mid.$m9", "sender_fbid": "900000000000001", "timestamp_ms": "1792090000000", "content_type": "TEXT", "igd_snippet": "on my way", "content": { "__typename": "SlideMessageText", "text_body": "on my way" } }, "cursor": "c9" }
+                  ],
+                  "page_info": { "end_cursor": "c9", "has_next_page": false }
+                },
+                "thread_image_url": "https://scontent.cdninstagram.com/v/group.jpg"
+              }
+            },
+            "cursor": "t2"
+          }
+        ],
+        "page_info": { "end_cursor": "t2", "has_next_page": true }
+      }
+    }
+  }
+}

@@ -3,3 +3,4 @@ out/
 dist/
 *.log
 .ig-capture/
+src/main/ig/__fixtures__/real/
