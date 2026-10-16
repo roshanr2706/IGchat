@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { MediaCache, serveMedia } from './cache';
 import { toMediaUrl } from './url';
@@ -46,6 +46,51 @@ describe('MediaCache', () => {
     expect(await cache.get(SRC)).toBeNull(); // type is not image/video
     writeFileSync(join(dir, `${k}.type`), 'image/png\r\nX-Evil: 1');
     expect(await cache.get(SRC)).toBeNull();
+  });
+
+  it('clear removes every cache file but keeps the directory', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'igchat-media-'));
+    const cache = new MediaCache(dir);
+    await cache.put(SRC, Buffer.from([1]), 'image/png');
+    writeFileSync(join(dir, 'stray.tmp'), 'x');
+    await cache.clear();
+    expect(existsSync(dir)).toBe(true);
+    expect(readdirSync(dir)).toEqual([]);
+    expect(await cache.get(SRC)).toBeNull();
+    await expect(new MediaCache(join(dir, 'missing')).clear()).resolves.toBeUndefined();
+  });
+
+  it('prune evicts the type with its bin, and removes orphan tmp and type files', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'igchat-media-'));
+    const cache = new MediaCache(dir, 10);
+    await cache.put('https://scontent.cdninstagram.com/1.jpg', Buffer.alloc(6), 'image/jpeg');
+    await new Promise((r) => setTimeout(r, 20));
+    await cache.put('https://scontent.cdninstagram.com/2.jpg', Buffer.alloc(6), 'image/jpeg');
+    const old = new Date(Date.now() - 10 * 60_000);
+    const orphanType = join(dir, 'a'.repeat(64) + '.type');
+    const strayTmp = join(dir, 'b'.repeat(64) + '.x.bin.tmp');
+    const freshTmp = join(dir, 'c'.repeat(64) + '.y.bin.tmp');
+    for (const f of [orphanType, strayTmp, freshTmp]) writeFileSync(f, 'zz');
+    utimesSync(orphanType, old, old);
+    utimesSync(strayTmp, old, old);
+    await cache.prune();
+    const names = readdirSync(dir);
+    expect(names.filter((f) => f.endsWith('.bin'))).toHaveLength(1);
+    expect(names.filter((f) => f.endsWith('.type') && !f.startsWith('a'))).toHaveLength(1);
+    expect(names).not.toContain(basename(orphanType));
+    expect(names).not.toContain(basename(strayTmp));
+    expect(names).toContain(basename(freshTmp)); // may belong to an in-flight put
+  });
+
+  it('prunes once on first use so a cold session cannot overshoot the cap', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'igchat-media-'));
+    const seed = new MediaCache(dir, 1000);
+    await seed.put('https://scontent.cdninstagram.com/1.jpg', Buffer.alloc(8), 'image/jpeg');
+    await seed.put('https://scontent.cdninstagram.com/2.jpg', Buffer.alloc(8), 'image/jpeg');
+    const cold = new MediaCache(dir, 10);
+    await cold.get('https://scontent.cdninstagram.com/2.jpg');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(readdirSync(dir).filter((f) => f.endsWith('.bin'))).toHaveLength(1);
   });
 
   it('refuses to store non-media types', async () => {

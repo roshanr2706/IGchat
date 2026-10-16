@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { fromMediaUrl } from './url';
 
 const PRUNE_EVERY = 50;
+/** Orphaned tmp/type files older than this are removed by prune. */
+const STALE_MS = 60_000;
 /** Largest single media response we will buffer or cache. */
 export const MAX_MEDIA_BYTES = 64 * 1024 * 1024;
 
@@ -18,6 +20,7 @@ export function cleanMediaType(raw: string | null | undefined): string | null {
 /** Disk cache for Instagram CDN media, capped by size (oldest files removed first). File names are sha256 hex only. */
 export class MediaCache {
   private puts = 0;
+  private startup: Promise<void> | null = null;
 
   constructor(
     private readonly dir: string,
@@ -29,6 +32,7 @@ export class MediaCache {
   }
 
   async get(url: string): Promise<{ data: Buffer; type: string } | null> {
+    void this.startupPrune();
     const k = this.key(url);
     try {
       const [data, rawType] = await Promise.all([readFile(join(this.dir, `${k}.bin`)), readFile(join(this.dir, `${k}.type`), 'utf8')]);
@@ -43,6 +47,7 @@ export class MediaCache {
   async put(url: string, data: Buffer, type: string): Promise<void> {
     const clean = cleanMediaType(type);
     if (!clean || data.length > MAX_MEDIA_BYTES) return;
+    await this.startupPrune();
     const k = this.key(url);
     await mkdir(this.dir, { recursive: true });
     const suffix = randomBytes(6).toString('hex');
@@ -51,8 +56,9 @@ export class MediaCache {
     try {
       await writeFile(binTmp, data);
       await writeFile(typeTmp, clean);
-      await rename(binTmp, join(this.dir, `${k}.bin`));
+      // type first: a .bin is never paired with a stale type
       await rename(typeTmp, join(this.dir, `${k}.type`));
+      await rename(binTmp, join(this.dir, `${k}.bin`));
     } catch (e) {
       await rm(binTmp, { force: true });
       await rm(typeTmp, { force: true });
@@ -61,30 +67,56 @@ export class MediaCache {
     if (++this.puts % PRUNE_EVERY === 0) await this.prune();
   }
 
+  /** Removes every cache file but keeps the directory. Errors are swallowed. */
+  async clear(): Promise<void> {
+    try {
+      for (const name of await readdir(this.dir)) await rm(join(this.dir, name), { force: true }).catch(() => {});
+    } catch {
+      /* nothing to clear */
+    }
+  }
+
+  /** Runs the size-cap prune once per instance, the first time the cache is used. */
+  private startupPrune(): Promise<void> {
+    return (this.startup ??= this.prune().catch(() => {}));
+  }
+
   async prune(): Promise<void> {
     let names: string[];
     try {
-      names = (await readdir(this.dir)).filter((f) => f.endsWith('.bin'));
+      names = await readdir(this.dir);
     } catch {
       return;
     }
-    const settled = await Promise.all(
+    const bins = new Set(names.filter((f) => f.endsWith('.bin')).map((f) => f.slice(0, -4)));
+    const now = Date.now();
+    const files: { name: string; size: number; mtimeMs: number }[] = [];
+    await Promise.all(
       names.map(async (name) => {
+        const isBin = name.endsWith('.bin');
+        const isTmp = name.endsWith('.tmp');
+        const isType = name.endsWith('.type');
+        if (!isBin && !isTmp && !isType) return;
         try {
           const s = await stat(join(this.dir, name));
-          return { name, size: s.size, mtimeMs: s.mtimeMs };
+          // Orphans are only removed once old, so an in-flight put is never disturbed.
+          const stale = now - s.mtimeMs > STALE_MS;
+          if (isTmp || (isType && !bins.has(name.slice(0, -5)))) {
+            if (stale) await rm(join(this.dir, name), { force: true });
+            return;
+          }
+          if (isBin) files.push({ name, size: s.size, mtimeMs: s.mtimeMs });
         } catch {
-          return null;
+          /* vanished or unreadable: skip */
         }
       })
     );
-    const files = settled.filter((f): f is { name: string; size: number; mtimeMs: number } => f !== null);
     let total = files.reduce((sum, f) => sum + f.size, 0);
     files.sort((a, b) => a.mtimeMs - b.mtimeMs);
     for (const f of files) {
       if (total <= this.maxBytes) break;
       await rm(join(this.dir, f.name), { force: true });
-      await rm(join(this.dir, f.name.replace(/\.bin$/, '.type')), { force: true });
+      await rm(join(this.dir, f.name.replace(/.bin$/, '.type')), { force: true });
       total -= f.size;
     }
   }
