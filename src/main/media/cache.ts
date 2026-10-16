@@ -116,7 +116,7 @@ export class MediaCache {
     for (const f of files) {
       if (total <= this.maxBytes) break;
       await rm(join(this.dir, f.name), { force: true });
-      await rm(join(this.dir, f.name.replace(/.bin$/, '.type')), { force: true });
+      await rm(join(this.dir, f.name.replace(/\.bin$/, '.type')), { force: true });
       total -= f.size;
     }
   }
