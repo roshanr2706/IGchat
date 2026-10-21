@@ -21,12 +21,30 @@ class InboxStore {
   async load(): Promise<void> {
     this.loading = true;
     try {
-      const [me, page] = await Promise.all([call('session:me'), call('inbox:get')]);
-      this.me = me;
-      this.threads = sortThreads(page.items);
-      this.hasMore = page.hasMore;
+      // Fetched independently: without `me`, no message would count as yours (no edit/unsend), so a slow inbox
+      // must not cost the profile, and a profile that isn't ready yet must not cost the inbox.
+      const [me, page] = await Promise.allSettled([call('session:me'), call('inbox:get')]);
+      if (me.status === 'fulfilled') this.me = me.value;
+      if (page.status === 'rejected') throw page.reason;
+      this.threads = sortThreads(page.value.items);
+      this.hasMore = page.value.hasMore;
+      if (me.status === 'rejected') void this.retryMe();
     } finally {
       this.loading = false;
+    }
+  }
+
+  /** A few spaced retries for the profile alone (the engine may still be finishing its first load). */
+  private async retryMe(): Promise<void> {
+    for (const ms of [2000, 5000, 15000]) {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      if (this.me) return;
+      try {
+        this.me = await call('session:me');
+        return;
+      } catch {
+        // try again
+      }
     }
   }
 

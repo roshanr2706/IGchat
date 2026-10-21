@@ -37,6 +37,20 @@ describe('IgStore messages', () => {
     store.ingestThreads(threadNodes, { silent: true });
   });
 
+  it('re-attributes own messages that arrived before the viewer was known', () => {
+    const fresh = new IgStore();
+    // A message for an unknown viewer: its sender is only an fbid the store cannot map yet.
+    fresh.ingestMessages([{ ...node('mid.$m1'), sender: undefined }], { threadId: T1 });
+    expect(fresh.find(T1, 'mid.$m1')?.senderId).toBe('900000000000001');
+    const updated = vi.fn();
+    fresh.events.on('msg:updated', updated);
+    fresh.ingestThreads(threadNodes);
+    expect(fresh.find(T1, 'mid.$m1')?.senderId).toBe('9000000001');
+    expect(updated).toHaveBeenCalledWith(T1, expect.objectContaining({ id: 'mid.$m1', senderId: '9000000001' }));
+    // Reactions placed before the viewer was known are re-attributed too.
+    expect(fresh.find(T1, 'mid.$m1')?.reactions.flatMap((r) => r.userIds)).toContain('9000000001');
+  });
+
   it('groups new messages per thread in time order and maps senders', () => {
     const news = vi.fn();
     store.events.on('msg:new', news);

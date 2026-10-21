@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { DocIdRegistry } from '../engine/docIds';
 import { EngineWindow, type EngineOptions } from '../engine/engineWindow';
 import { Exec } from '../engine/exec';
+import { docIdLookupScript } from '../engine/pageScripts';
 import { RelayFeed } from '../engine/relayFeed';
 import { Tap } from '../engine/tap';
 import type { EngineLike, PageLike } from '../engine/types';
@@ -94,6 +95,13 @@ export function createIgChatService(opts: CreateOptions): { service: IgChatServi
     store,
     cache: new AccountCache(join(opts.userDataDir, 'accounts', 'default')),
     tmpDir: opts.tmpDir,
+    resolveDocId: async (name) => {
+      if (engine.state !== 'ready') return false;
+      const id = await engine.page.evaluate<unknown>(docIdLookupScript(name)).catch(() => null);
+      if (typeof id !== 'string' || !/^[0-9]{5,25}$/.test(id)) return false;
+      docIds.scrape(name, id);
+      return docIds.get(name) !== null;
+    },
     onLogout: opts.onLogout
   });
   return { service, store };

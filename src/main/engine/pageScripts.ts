@@ -52,3 +52,24 @@ export async function setFileOnPageInput(cdp: CdpLike, filePath: string): Promis
   await cdp.send('DOM.setFileInputFiles', { nodeId: target, files: [filePath] });
   return true;
 }
+
+/**
+ * Looks up an operation's doc id through the page's own module system. If Instagram hasn't loaded that module yet,
+ * its lazy loader fetches it, the same way the page does when the matching UI (e.g. the new-message dialog) opens.
+ * Resolves to the id string, or null.
+ */
+export function docIdLookupScript(operationName: string, timeoutMs = 8000): string {
+  if (!/^\w{1,100}$/.test(operationName)) return 'Promise.resolve(null)';
+  const mod = JSON.stringify(`${operationName}_instagramRelayOperation`);
+  return `(() => new Promise((resolve) => {
+  const asId = (m) => { const v = m && typeof m === 'object' && 'default' in m ? m.default : m; return typeof v === 'string' && /^[0-9]{5,25}$/.test(v) ? v : null; };
+  try {
+    if (typeof window.require === 'function') {
+      try { const v = asId(window.require(${mod})); if (v) return resolve(v); } catch (e) {}
+    }
+    if (typeof window.requireLazy !== 'function') return resolve(null);
+    const t = setTimeout(() => resolve(null), ${Math.max(1, Math.floor(timeoutMs))});
+    window.requireLazy([${mod}], (m) => { clearTimeout(t); resolve(asId(m)); });
+  } catch (e) { resolve(null); }
+}))()`;
+}

@@ -558,6 +558,22 @@ describe('IgChatService live data', () => {
     expect(removed).toHaveBeenCalledWith(T1, 'mid.$m2');
   });
 
+  it("notices an unsend when a thread's message list drops a message the page still keeps a record of", async () => {
+    const removed = vi.fn();
+    svc.on('msg:removed', removed);
+    const without = messageNodes.filter((n) => n.message_id !== 'mid.$m2');
+    exec.handlers[OPS.messageList] = () => ({ fetch__SlideThread: { as_ig_direct_thread: { slide_messages: { edges: without.map((node) => ({ node })), page_info: {} } } } });
+    await svc.applyDelta({ threads: [{ ...threadNodes[0], slide_messages: { edges: without.map((node) => ({ node })) } }], messages: [], removed: [] });
+    expect(removed).toHaveBeenCalledWith(T1, 'mid.$m2');
+  });
+
+  it('does not ask Instagram anything when a thread delta lists every message it already has', async () => {
+    exec.calls.length = 0;
+    const listed = messageNodes.slice(0, 5);
+    await svc.applyDelta({ threads: [{ ...threadNodes[0], slide_messages: { edges: listed.map((node) => ({ node })) } }], messages: [], removed: [] });
+    expect(exec.calls).toEqual([]);
+  });
+
   it('keeps a message whose removal cannot be verified', async () => {
     const removed = vi.fn();
     svc.on('msg:removed', removed);
@@ -654,6 +670,30 @@ describe('IgChatService people search', () => {
     const people = await svc.searchPeople('alex');
     expect(people).toEqual([expect.objectContaining({ id: '9000000002', username: 'alex_r' })]);
     expect(await svc.searchPeople(' ')).toEqual([]);
+  });
+
+  it("asks the page for the search operation's id when it has not seen it, then searches", async () => {
+    let known = false;
+    exec.handlers[OPS.search] = () => {
+      if (!known) throw new ServiceError('EngineNotReady', 'Unknown Instagram operation IGDOmniPickerSearchResultsListQuery');
+      return searchResult([{ pk: '9000000002', username: 'alex_r', full_name: 'Alex Rivera' }]);
+    };
+    const resolveDocId = vi.fn(async (name: string) => {
+      expect(name).toBe(OPS.search);
+      known = true;
+      return true;
+    });
+    const s = new IgChatService({ engine, relay, exec, store, tmpDir: tmp, now: () => NOW, sleep: async () => {}, timeouts: { ready: 50 }, resolveDocId });
+    expect(await s.searchPeople('alex')).toEqual([expect.objectContaining({ username: 'alex_r' })]);
+    expect(resolveDocId).toHaveBeenCalledTimes(1);
+  });
+
+  it('still reports search as unavailable when the page cannot supply the id', async () => {
+    exec.handlers[OPS.search] = () => {
+      throw new ServiceError('EngineNotReady', 'Unknown Instagram operation IGDOmniPickerSearchResultsListQuery');
+    };
+    const s = new IgChatService({ engine, relay, exec, store, tmpDir: tmp, now: () => NOW, sleep: async () => {}, timeouts: { ready: 50 }, resolveDocId: async () => false });
+    await expect(s.searchPeople('alex')).rejects.toMatchObject({ message: "People search isn't available yet" });
   });
 
   it('opens an existing DM with a person without navigating', async () => {

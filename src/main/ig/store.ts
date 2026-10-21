@@ -36,10 +36,42 @@ export class IgStore {
   setViewer(user: User, fbid: string | null): void {
     this.viewer = user;
     if (fbid) this.viewerFbid = fbid;
+    this.reattribute();
   }
 
   setViewerFbid(fbid: string): void {
-    if (!this.viewerFbid) this.viewerFbid = fbid;
+    if (this.viewerFbid) return;
+    this.viewerFbid = fbid;
+    this.reattribute();
+  }
+
+  /** The Instagram id behind an fbid, once known (the viewer's own, or a participant's). */
+  private igidOf(fbid: string): string | undefined {
+    if (this.viewer && this.viewerFbid && fbid === this.viewerFbid) return this.viewer.id;
+    return this.igidByFbid.get(fbid);
+  }
+
+  /**
+   * Messages normalized before the viewer (or a participant) was known carry a bare fbid as sender. Rewrite those
+   * to the Instagram id the UI compares against, so own messages become editable/unsendable, and tell the renderer.
+   */
+  private reattribute(): void {
+    const fix = (id: string): string => (/^[0-9]{12,}$/.test(id) ? (this.igidOf(id) ?? id) : id);
+    for (const [threadId, bucket] of this.messagesByThread) {
+      for (const [id, m] of bucket) {
+        const senderId = fix(m.senderId);
+        const reactions = m.reactions.map((r) => ({ ...r, userIds: [...new Set(r.userIds.map(fix))] }));
+        const replyTo = m.replyTo ? { ...m.replyTo, senderId: fix(m.replyTo.senderId) } : undefined;
+        const changed =
+          senderId !== m.senderId ||
+          (replyTo && replyTo.senderId !== m.replyTo!.senderId) ||
+          reactions.some((r, i) => r.userIds.join() !== m.reactions[i]!.userIds.join());
+        if (!changed) continue;
+        const next = { ...m, senderId, reactions, ...(replyTo ? { replyTo } : {}) } as Message;
+        bucket.set(id, next);
+        this.events.emit('msg:updated', threadId, next);
+      }
+    }
   }
 
   clear(): void {
@@ -61,10 +93,12 @@ export class IgStore {
         }
       }
     }
+    const knownBefore = this.igidByFbid.size;
+    const hadViewer = Boolean(this.viewer && this.viewerFbid);
     for (const raw of raws) {
       const n = normalizeThread(raw, this.viewer?.id ?? null);
       if (!n) continue;
-      if (n.viewerFbid) this.setViewerFbid(n.viewerFbid);
+      if (n.viewerFbid && !this.viewerFbid) this.viewerFbid = n.viewerFbid;
       if (!this.viewer) this.viewer = normalizeUser((raw as Record<string, unknown>).viewer)?.user ?? null;
       for (const u of n.users) if (u.fbid) this.igidByFbid.set(u.fbid, u.user.id);
       this.threadIdByFbid.set(n.fbid, n.thread.id);
@@ -79,6 +113,7 @@ export class IgStore {
       if (!prev || JSON.stringify(prev.thread) !== JSON.stringify(n.thread)) changed.push(n.thread);
     }
     if (changed.length && !opts.silent) this.events.emit('inbox:updated', changed);
+    if (this.igidByFbid.size !== knownBefore || (!hadViewer && this.viewer && this.viewerFbid)) this.reattribute();
     this.replayOrphans();
     return all;
   }
@@ -194,6 +229,11 @@ export class IgStore {
     this.bucket(threadId).set(messageId, tagged);
     this.events.emit('msg:updated', threadId, tagged);
     return tagged;
+  }
+
+  /** The thread id for a thread fbid (or id) the store already knows. */
+  threadIdOf(fbid: string): string | undefined {
+    return this.threadIdByFbid.get(fbid) ?? (this.threadsById.has(fbid) ? fbid : undefined);
   }
 
   thread(id: string): Thread | undefined {

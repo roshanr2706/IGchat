@@ -38,6 +38,8 @@ export type IgServiceDeps = {
   store: IgStore;
   cache?: CacheLike;
   tmpDir: string;
+  /** Asks the page for an operation's doc id it has not used yet (loads the page's own module). True if found. */
+  resolveDocId?: (name: string) => Promise<boolean>;
   /** Extra per-account cleanup after logout (e.g. wiping cached media). */
   onLogout?: () => Promise<void> | void;
   now?: () => number;
@@ -316,15 +318,21 @@ export class IgChatService implements ChatService {
 
   private async runSearch(text: string): Promise<User[]> {
     await this.ready();
+    const unknownOp = (err: unknown): boolean => err instanceof ServiceError && err.code === 'EngineNotReady' && /^Unknown Instagram operation/.test(err.message);
     let data: unknown;
     try {
       data = await this.deps.exec.run(OPS.search, searchVars(text));
     } catch (err) {
-      // exec reports an operation whose doc id was never seen or scraped this way.
-      if (err instanceof ServiceError && err.code === 'EngineNotReady' && /^Unknown Instagram operation/.test(err.message)) {
-        throw new ServiceError('EngineNotReady', "People search isn't available yet");
+      // exec reports an operation whose doc id was never seen or scraped. The search UI's module is loaded lazily by
+      // Instagram, so ask the page for it once (as opening its "new message" dialog would) and try again.
+      if (!unknownOp(err)) throw err;
+      if (!(await this.deps.resolveDocId?.(OPS.search).catch(() => false))) throw new ServiceError('EngineNotReady', "People search isn't available yet");
+      try {
+        data = await this.deps.exec.run(OPS.search, searchVars(text));
+      } catch (again) {
+        if (unknownOp(again)) throw new ServiceError('EngineNotReady', "People search isn't available yet");
+        throw again;
       }
-      throw err;
     }
     const users = extractSearchUsers(data)
       .map((raw) => normalizeUser(raw)?.user)
@@ -608,13 +616,47 @@ export class IgChatService implements ChatService {
   async applyDelta(delta: RelayDelta): Promise<void> {
     this.store.ingestThreads(delta.threads);
     this.store.ingestMessages(delta.messages);
-    if (delta.removed.length) await this.verifyRemovals(delta.removed);
+    const candidates = [...this.store.candidatesForRemoval(delta.removed), ...this.droppedFromThreadLists(delta.threads)];
+    if (candidates.length) await this.verifyRemovals(candidates);
+  }
+
+  /**
+   * Instagram removes an unsent message from the thread's message list but may keep its record around, so the bridge
+   * never reports it as removed. Any stored message inside the time span a thread delta lists, but missing from it,
+   * is a removal candidate (still verified against Instagram before anything is removed).
+   */
+  private droppedFromThreadLists(threads: unknown[]): { threadId: string; messageId: string; timestamp: number }[] {
+    const out: { threadId: string; messageId: string; timestamp: number }[] = [];
+    for (const raw of threads) {
+      const r = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
+      const conn = r?.slide_messages && typeof r.slide_messages === 'object' ? (r.slide_messages as Record<string, unknown>) : null;
+      if (!r || !conn || !Array.isArray(conn.edges)) continue;
+      const nodes = conn.edges.map((e) => (e && typeof e === 'object' ? (e as Record<string, unknown>).node : undefined));
+      const listed = new Set(nodes.map(messageIdOf).filter((id): id is string => !!id));
+      const times = nodes.map((n) => Number((n as Record<string, unknown> | undefined)?.timestamp_ms)).filter(Number.isFinite);
+      if (listed.size < 2 || times.length < 2) continue;
+      const fbid = typeof r.thread_fbid === 'string' ? r.thread_fbid : typeof r.id === 'string' ? r.id : undefined;
+      const threadId = fbid ? this.store.threadIdOf(fbid) : undefined;
+      if (!threadId) continue;
+      const lo = Math.min(...times);
+      const hi = Math.max(...times);
+      for (const m of this.store.messagesOf(threadId)) {
+        if (m.status === 'sent' && m.timestamp > lo && m.timestamp < hi && !listed.has(m.id)) out.push({ threadId, messageId: m.id, timestamp: m.timestamp });
+      }
+    }
+    return out;
   }
 
   /** A record vanishing from the page's store can mean an unsend or just cache cleanup; confirm before removing. */
-  private async verifyRemovals(ids: string[]): Promise<void> {
+  private async verifyRemovals(found: { threadId: string; messageId: string; timestamp: number }[]): Promise<void> {
     const byThread = new Map<string, { messageId: string; timestamp: number }[]>();
-    for (const c of this.store.candidatesForRemoval(ids)) byThread.set(c.threadId, [...(byThread.get(c.threadId) ?? []), c]);
+    const seen = new Set<string>();
+    for (const c of found) {
+      const key = c.threadId + '/' + c.messageId;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      byThread.set(c.threadId, [...(byThread.get(c.threadId) ?? []), c]);
+    }
     for (const [threadId, candidates] of byThread) {
       try {
         const page = extractMessageListPage(await this.deps.exec.run(OPS.messageList, messageListVars(threadId, null)));

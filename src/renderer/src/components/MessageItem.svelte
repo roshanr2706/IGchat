@@ -60,6 +60,7 @@
     class:pending={message.status === 'pending'}
     class:failed={message.status === 'failed'}
     class:uncertain={message.status === 'uncertain'}
+    class:tools-open={hovered || pinned}
     class:editing
     class:replying={ui.replyTo?.id === message.id}
     data-message-id={message.id}
@@ -132,6 +133,11 @@
   .message:hover,
   .message.editing {
     background: color-mix(in srgb, var(--bg-hover) 45%, transparent);
+  }
+  /* content-visibility: auto implies paint containment, which would clip the toolbar that sits above the row. */
+  .message.tools-open {
+    content-visibility: visible;
+    z-index: 3;
   }
   .message.replying {
     background: var(--mention-bg);
