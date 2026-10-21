@@ -718,6 +718,33 @@ describe('IgChatService people search', () => {
     expect((await svc.getThreadDetails('1000000000000077')).id).toBe('1000000000000077');
   });
 
+  it("fetches an opened person's history right away, so the chat opens with its messages", async () => {
+    exec.handlers[SEARCH_PATH] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend' }]);
+    await svc.searchPeople('new');
+    engine.userThreads['9000000077'] = '1000000000000077';
+    const nodes = messageNodes.slice(0, 4).map((n) => ({ ...n, thread_fbid: '1000000000000077' }));
+    exec.handlers[OPS.messageList] = (v) => {
+      expect(v.id).toBe('1000000000000077');
+      return { fetch__SlideThread: { as_ig_direct_thread: { slide_messages: { edges: nodes.map((node) => ({ node })), page_info: { has_next_page: true } } } } };
+    };
+    await svc.openThreadWithUser('9000000077');
+    exec.calls.length = 0;
+    const page = await svc.openThread('1000000000000077');
+    expect(page.messages.map((m) => m.id)).toEqual(['mid.$m1', 'mid.$m2', 'mid.$m3', 'mid.$m4']);
+    expect(page.hasOlder).toBe(true);
+    // Already loaded: opening it didn't need another request.
+    expect(exec.calls.filter((c) => c.name === OPS.messageList)).toHaveLength(0);
+  });
+
+  it('opens a brand-new conversation without fetching history it cannot have', async () => {
+    exec.handlers[SEARCH_PATH] = () => searchResult([{ pk: '9000000078', username: 'stranger', full_name: 'Stranger' }]);
+    await svc.searchPeople('str');
+    engine.userThreads['9000000078'] = '9000000078';
+    const t = await svc.openThreadWithUser('9000000078');
+    expect(t.id).toBe('9000000078');
+    expect(exec.calls.filter((c) => c.name === OPS.messageList)).toHaveLength(0);
+  });
+
   it('fails clearly when the person is unknown or Instagram cannot open the chat', async () => {
     await expect(svc.openThreadWithUser('nobody')).rejects.toMatchObject({ code: 'NotFound' });
     exec.handlers[SEARCH_PATH] = () => searchResult([{ pk: '9000000088', username: 'ghost', full_name: '' }]);

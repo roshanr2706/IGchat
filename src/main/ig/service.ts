@@ -289,10 +289,8 @@ export class IgChatService implements ChatService {
     this.navigate(threadId);
     // The page loads the thread into its own store; the relay delivers it. Fall back to a query if it doesn't.
     await this.waitFor(() => this.store.messagesOf(threadId).length > 0, this.timeout('openThread'));
-    if (this.store.messagesOf(threadId).length === 0) {
-      const page = extractMessageListPage(await this.deps.exec.run(OPS.messageList, messageListVars(threadId, null)));
-      this.store.ingestMessages(page.nodes, { silent: true, threadId });
-      this.hasOlder.set(threadId, page.hasOlder);
+    if (this.store.messagesOf(threadId).length === 0 && !(await this.fetchHistory(threadId))) {
+      throw new ServiceError('Unknown', "Couldn't load this conversation");
     }
     return {
       messages: this.store.messagesOf(threadId).slice(-60),
@@ -373,7 +371,6 @@ export class IgChatService implements ChatService {
     if (!threadId) throw new ServiceError('Unknown', `Couldn't open a chat with @${user.username}`);
     // The relay may deliver the real record under the id the page used or one we can match by person.
     const arrived = (): Thread | undefined => this.store.thread(threadId) ?? this.store.dmThreadWith(user.id);
-    await this.waitFor(() => !!arrived(), this.timeout('openThread'));
     if (!arrived()) {
       this.store.addPlaceholderThread({
         id: threadId,
@@ -388,11 +385,34 @@ export class IgChatService implements ChatService {
         avatarUrls: user.avatarUrl ? [user.avatarUrl] : []
       });
     }
+    // Fetch the conversation now that the page is on it: faster than waiting for the live feed, and it guarantees
+    // the history is there when the chat opens. A brand-new conversation (still addressed by the user id) has none.
+    if (threadId !== user.id) await this.fetchHistory(threadId);
     const thread = arrived();
     if (!thread) throw new ServiceError('Unknown', `Couldn't open a chat with @${user.username}`);
     // Only claim the active thread if the user hasn't picked something else in the meantime.
     if (token === this.selectSeq) this.activeThreadId = thread.id;
     return thread;
+  }
+
+  /** The newest page of a thread's messages (and the thread itself when the response carries it). One retry. */
+  private async fetchHistory(threadId: string): Promise<boolean> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const data = await this.deps.exec.run(OPS.messageList, messageListVars(threadId, null));
+        const node = (data as { fetch__SlideThread?: { as_ig_direct_thread?: Record<string, unknown> } } | null)?.fetch__SlideThread?.as_ig_direct_thread;
+        // Only a full thread record (with its people) can stand in for the placeholder.
+        if (node && Array.isArray(node.users) && node.users.length) this.store.ingestThreads([node], { silent: true });
+        const page = extractMessageListPage(data);
+        this.store.ingestMessages(page.nodes, { silent: true, threadId });
+        this.hasOlder.set(threadId, page.hasOlder);
+        return true;
+      } catch {
+        // The page may still be settling on the thread; try once more shortly.
+        if (attempt === 0) await this.sleep(1000);
+      }
+    }
+    return false;
   }
 
   async sendText(threadId: string, text: string, replyToId: string | null, clientTempId?: string): Promise<Message> {
