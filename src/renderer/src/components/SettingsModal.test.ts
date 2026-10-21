@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/svelte';
+import { render, screen, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SETTINGS, sanitizeSettings, type Settings } from '../../../shared/settings';
@@ -82,5 +82,29 @@ describe('SettingsModal', () => {
     render(SettingsModal);
     await user.click(screen.getByRole('button', { name: 'Close settings' }));
     expect(ui.settingsOpen).toBe(false);
+  });
+});
+
+describe('SettingsModal quick reactions', () => {
+  it('replaces, adds and removes quick reactions, and resets them', async () => {
+    const user = userEvent.setup();
+    render(SettingsModal);
+    // Replace the first one (❤️) with 🥀 through the picker.
+    await user.click(screen.getByRole('button', { name: 'Change quick reaction ❤️' }));
+    const picker = await screen.findByRole('dialog', { name: 'Pick a reaction' });
+    await user.type(within(picker).getByRole('textbox', { name: 'Search emoji' }), 'wilted');
+    await user.click(await within(picker).findByRole('button', { name: 'React with 🥀' }));
+    expect(settings.value.quickReactions[0]).toBe('🥀');
+    // Add one, then remove one.
+    await user.click(screen.getByRole('button', { name: 'Add a quick reaction' }));
+    const add = await screen.findByRole('dialog', { name: 'Pick a reaction' });
+    await user.type(within(add).getByRole('textbox', { name: 'Search emoji' }), 'grin');
+    await user.click((await within(add).findAllByRole('button', { name: /^React with / }))[0]!);
+    expect(settings.value.quickReactions).toHaveLength(6);
+    await user.click(screen.getByRole('button', { name: 'Remove quick reaction 😂' }));
+    expect(settings.value.quickReactions).not.toContain('😂');
+    await user.click(screen.getByRole('button', { name: 'Reset quick reactions' }));
+    expect(settings.value.quickReactions).toEqual(DEFAULT_SETTINGS.quickReactions);
+    await vi.waitFor(() => expect(saved.quickReactions).toEqual(DEFAULT_SETTINGS.quickReactions));
   });
 });

@@ -2,6 +2,7 @@
   import type { Message } from '../../../shared/types';
   import { canEdit, canUnsend } from '../lib/editWindow';
   import { messages } from '../stores/messages.svelte';
+  import { settings } from '../stores/settings.svelte';
   import { ui } from '../stores/ui.svelte';
   import EmojiPicker from './EmojiPicker.svelte';
 
@@ -15,7 +16,8 @@
   };
   let { message, threadId, myId, variant, ondone, onpin }: Props = $props();
 
-  const QUICK = ['❤️', '😂', '😮', '😢', '👍'];
+  // Your quick reactions (Settings > Appearance); the hover bar shows the first three.
+  const QUICK = $derived(settings.value.quickReactions);
   let pickerOpen = $state(false);
 
   const editable = $derived(canEdit(message, myId, Date.now()));

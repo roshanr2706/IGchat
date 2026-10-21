@@ -43,3 +43,18 @@ describe('sanitizeSettings', () => {
     expect(s.windowColors).not.toBe(DEFAULT_SETTINGS.windowColors);
   });
 });
+
+describe('quick reactions', () => {
+  it('defaults to five emoji and keeps a valid custom set', () => {
+    expect(sanitizeSettings({}).quickReactions).toEqual(DEFAULT_SETTINGS.quickReactions);
+    expect(DEFAULT_SETTINGS.quickReactions).toHaveLength(5);
+    expect(sanitizeSettings({ quickReactions: ['🥀', '😁', '🔥'] }).quickReactions).toEqual(['🥀', '😁', '🔥']);
+  });
+
+  it('drops junk entries, duplicates and extras, and falls back when nothing usable is left', () => {
+    expect(sanitizeSettings({ quickReactions: ['🥀', 'hello', 7, '', '🥀', '😁'] }).quickReactions).toEqual(['🥀', '😁']);
+    expect(sanitizeSettings({ quickReactions: Array(20).fill(0).map((_, i) => String.fromCodePoint(0x1f600 + i)) }).quickReactions).toHaveLength(8);
+    expect(sanitizeSettings({ quickReactions: ['nope'] }).quickReactions).toEqual(DEFAULT_SETTINGS.quickReactions);
+    expect(sanitizeSettings({ quickReactions: 'x' }).quickReactions).toEqual(DEFAULT_SETTINGS.quickReactions);
+  });
+});

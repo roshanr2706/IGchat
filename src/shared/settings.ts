@@ -13,7 +13,23 @@ export type Settings = {
   detailsPref: DetailsPref;
   /** Colors main uses for the window background and title-bar overlay before the renderer paints. */
   windowColors: WindowColors;
+  /** The one-click reactions on a message's hover bar and menu (1–8 emoji). */
+  quickReactions: string[];
 };
+
+export const MAX_QUICK_REACTIONS = 8;
+const QUICK_DEFAULT = ['❤️', '😂', '😮', '😢', '👍'];
+
+/** One emoji (possibly with modifiers / joiners), not text. */
+function isEmoji(v: unknown): v is string {
+  return typeof v === 'string' && v.length > 0 && v.length <= 16 && /\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(v) && !/[\p{L}\p{N}\s]/u.test(v.replace(/[#*0-9]/g, ''));
+}
+
+function quickReactions(v: unknown): string[] {
+  if (!Array.isArray(v)) return [...QUICK_DEFAULT];
+  const out = [...new Set(v.filter(isEmoji))].slice(0, MAX_QUICK_REACTIONS);
+  return out.length ? out : [...QUICK_DEFAULT];
+}
 
 export const SIDEBAR_MIN = 180;
 export const SIDEBAR_MAX = 420;
@@ -34,7 +50,8 @@ export const DEFAULT_SETTINGS: Settings = {
   detailsWidth: DETAILS_DEFAULT,
   sidebarCollapsed: false,
   detailsPref: 'auto',
-  windowColors: { base: '#313338', titlebar: '#1e1f22', symbol: '#dbdee1' }
+  windowColors: { base: '#313338', titlebar: '#1e1f22', symbol: '#dbdee1' },
+  quickReactions: QUICK_DEFAULT
 };
 
 const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n));
@@ -59,6 +76,7 @@ export function sanitizeSettings(input: unknown): Settings {
       base: isHex(wc.base) ? wc.base : d.windowColors.base,
       titlebar: isHex(wc.titlebar) ? wc.titlebar : d.windowColors.titlebar,
       symbol: isHex(wc.symbol) ? wc.symbol : d.windowColors.symbol
-    }
+    },
+    quickReactions: quickReactions(o.quickReactions)
   };
 }

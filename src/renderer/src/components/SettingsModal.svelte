@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { DEFAULT_SETTINGS, FONT_SCALES } from '../../../shared/settings';
+  import { DEFAULT_SETTINGS, FONT_SCALES, MAX_QUICK_REACTIONS } from '../../../shared/settings';
   import type { ThemeDef } from '../../../shared/theme';
   import { call } from '../lib/api';
   import { settings } from '../stores/settings.svelte';
@@ -7,6 +7,7 @@
   import { ui } from '../stores/ui.svelte';
   import { SYSTEM_THEME_ID } from '../themes/apply';
   import { BUILTIN_THEMES } from '../themes/builtin';
+  import EmojiPicker from './EmojiPicker.svelte';
 
   const FONT_LABELS: Record<number, string> = { 0.875: 'Small', 1: 'Default', 1.125: 'Large', 1.25: 'Extra large' };
 
@@ -15,6 +16,29 @@
 
   function close(): void {
     ui.settingsOpen = false;
+  }
+
+  /** Which quick-reaction slot the picker is choosing for: an index to replace, 'add', or closed. */
+  let choosing = $state<number | 'add' | null>(null);
+
+  function chooseQuick(emoji: string): void {
+    const list = [...settings.value.quickReactions];
+    const slot = choosing;
+    choosing = null;
+    if (slot === 'add') {
+      if (!list.includes(emoji)) list.push(emoji);
+    } else if (slot !== null) {
+      const existing = list.indexOf(emoji);
+      // Picking one that's already there swaps the two.
+      if (existing >= 0) list[existing] = list[slot]!;
+      list[slot] = emoji;
+    }
+    void settings.update({ quickReactions: list });
+  }
+
+  function removeQuick(i: number): void {
+    const list = settings.value.quickReactions.filter((_, j) => j !== i);
+    if (list.length) void settings.update({ quickReactions: list });
   }
 
   function setAccentEnabled(on: boolean): void {
@@ -105,6 +129,28 @@
     </section>
 
     <section>
+      <h3>Quick reactions</h3>
+      <p class="hint">One click on a message's hover bar (the first three) and its right-click menu. Type <code>+:emoji:</code> in the message box to react to the latest message.</p>
+      <div class="quick-row">
+        {#each settings.value.quickReactions as emoji, i (emoji)}
+          <span class="quick-slot">
+            <button class="quick-emoji" data-picker-toggle aria-label="Change quick reaction {emoji}" title="Change" onclick={() => (choosing = choosing === i ? null : i)}>{emoji}</button>
+            {#if settings.value.quickReactions.length > 1}
+              <button class="quick-remove" aria-label="Remove quick reaction {emoji}" title="Remove" onclick={() => removeQuick(i)}>✕</button>
+            {/if}
+          </span>
+        {/each}
+        {#if settings.value.quickReactions.length < MAX_QUICK_REACTIONS}
+          <button class="quick-add" data-picker-toggle aria-label="Add a quick reaction" title="Add" onclick={() => (choosing = choosing === 'add' ? null : 'add')}>+</button>
+        {/if}
+        <button class="secondary" aria-label="Reset quick reactions" onclick={() => void settings.update({ quickReactions: [...DEFAULT_SETTINGS.quickReactions] })}>Reset</button>
+      </div>
+      {#if choosing !== null}
+        <div class="quick-picker"><EmojiPicker onpick={chooseQuick} onclose={() => (choosing = null)} /></div>
+      {/if}
+    </section>
+
+    <section>
       <h3>Account</h3>
       <button class="secondary" onclick={() => void call('auth:login').catch(() => ui.toast("Couldn't open Instagram"))}>Open the Instagram window</button>
       <button class="secondary" onclick={() => void logOut()}>Log out of Instagram</button>
@@ -161,6 +207,54 @@
   }
   section:last-child {
     border-bottom: none;
+  }
+  .hint {
+    margin: 0 0 10px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+  .quick-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+  .quick-slot {
+    position: relative;
+  }
+  .quick-emoji,
+  .quick-add {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    background: var(--bg-sidebar);
+    font-size: 1.3rem;
+  }
+  .quick-add {
+    color: var(--text-muted);
+  }
+  .quick-emoji:hover,
+  .quick-add:hover {
+    background: var(--bg-hover);
+  }
+  .quick-remove {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    display: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+    font-size: 0.65rem;
+  }
+  .quick-slot:hover .quick-remove,
+  .quick-remove:focus-visible {
+    display: block;
+  }
+  .quick-picker {
+    margin-top: 10px;
   }
   h3 {
     margin: 0 0 10px;
