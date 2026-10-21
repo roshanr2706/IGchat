@@ -3,7 +3,7 @@ import threadList from './__fixtures__/threadList.json';
 import messageList from './__fixtures__/messageList.json';
 import {
   editVars, extractEditResult, extractMessageListPage, extractReactions, extractSearchUsers, extractSendResult, extractThreadListPage, extractUnsendResult,
-  generateOtid, messageListVars, OPS, reactVars, searchVars, sendTextVars, threadListVars, unsendVars
+  generateOtid, messageListVars, OPS, reactVars, SEARCH_PATH, searchParams, sendTextVars, threadListVars, unsendVars
 } from './ops';
 
 describe('ops', () => {
@@ -14,8 +14,7 @@ describe('ops', () => {
       sendText: 'IGDirectTextSendMutation',
       edit: 'IGDirectEditMessageMutation',
       unsend: 'IGDMessageUnsendDialogOffMsysMutation',
-      react: 'IGDirectReactionSendMutation',
-      search: 'IGDOmniPickerSearchResultsListQuery'
+      react: 'IGDirectReactionSendMutation'
     });
   });
 
@@ -48,26 +47,12 @@ describe('ops', () => {
     expect(generateOtid(1792100000000, () => 0.123456)).toBe('1792100000000123456');
     expect(generateOtid()).toMatch(/^\d{19}$/);
   });
-  it('builds and reads the people search', () => {
-    expect(OPS.search).toBe('IGDOmniPickerSearchResultsListQuery');
-    expect(searchVars('alex')).toEqual({ search_text: 'alex' });
-    expect(extractSearchUsers({ xfb_combinedIGSearchQuery: { search_messenger_contact_v2: [{ pk: '1', username: 'a' }, { pk: '2', username: 'b' }] } })).toHaveLength(2);
+  it('builds and reads the people search (the new-message search box request)', () => {
+    expect(SEARCH_PATH).toBe('/api/v1/direct_v2/ranked_recipients/');
+    expect(searchParams('alex')).toEqual({ mode: 'universal', query: 'alex', show_threads: 'true' });
+    // Live shape (2026-10-21): payload.ranked_recipients[].user; threads may be mixed in and are skipped.
+    const payload = { section_order: ['users'], ranked_recipients: [{ user: { id: '9000000002', pk: 9000000002, username: 'alex_r', full_name: 'Alex' } }, { thread: { thread_id: '1', thread_title: 'x', is_group: true, users: [{ id: '9000000099', username: 'group_member' }] } }, { user: { id: '9000000002', username: 'alex_r' } }, { thread: { thread_id: '2', is_group: false, users: [{ id: '9000000003', username: 'dm_only' }] } }] };
+    expect((extractSearchUsers(payload) as { username: string }[]).map((u) => u.username)).toEqual(['alex_r', 'dm_only']);
     expect(extractSearchUsers(null)).toEqual([]);
-  });
-
-  it('collects people from every result list, including wrapped users, once each', () => {
-    const data = {
-      xfb_combinedIGSearchQuery: {
-        search_messenger_contact_v2: [{ pk: '1', username: 'a' }],
-        search_ig_users: { edges: [{ node: { user: { pk: '2', username: 'b' } } }, { node: { pk: '1', username: 'a' } }] },
-        other: [{ title: 'not a person' }]
-      }
-    };
-    expect((extractSearchUsers(data) as { pk: string }[]).map((u) => u.pk)).toEqual(['1', '2']);
-  });
-
-  it("copies the page's own search variables, replacing only the text", () => {
-    expect(searchVars('alex', { search_text: 'old', num_results: 20, surface: 'omnipicker' })).toEqual({ search_text: 'alex', num_results: 20, surface: 'omnipicker' });
-    expect(searchVars('alex', { query: 'old', count: 5 })).toEqual({ query: 'alex', count: 5 });
   });
 });

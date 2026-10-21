@@ -4,8 +4,7 @@ export const OPS = {
   sendText: 'IGDirectTextSendMutation',
   edit: 'IGDirectEditMessageMutation',
   unsend: 'IGDMessageUnsendDialogOffMsysMutation',
-  react: 'IGDirectReactionSendMutation',
-  search: 'IGDOmniPickerSearchResultsListQuery'
+  react: 'IGDirectReactionSendMutation'
 } as const;
 
 type Raw = Record<string, unknown>;
@@ -107,30 +106,35 @@ export function generateOtid(now: number = Date.now(), rand: () => number = Math
   return `${Math.floor(now)}${String(Math.floor(rand() * 1_000_000)).padStart(6, '0')}`.slice(0, 19).padEnd(19, '0');
 }
 
-const SEARCH_TEXT_KEYS = ['search_text', 'query', 'search_query', 'text'];
+/** The REST read Instagram's own "new message" search box calls as you type (seen live 2026-10-21). */
+export const SEARCH_PATH = '/api/v1/direct_v2/ranked_recipients/';
 
-/** Variables for the people search. With the page's own variables as a template, only the typed text changes. */
-export function searchVars(text: string, template?: Record<string, unknown> | null): Record<string, unknown> {
-  if (!template) return { search_text: text };
-  const key = SEARCH_TEXT_KEYS.find((k) => k in template) ?? 'search_text';
-  return { ...template, [key]: text };
-}
-
-/** The page's search variables with the typed text blanked, safe to remember. */
-export function searchTemplateOf(variables: unknown): Record<string, unknown> | null {
-  const v = obj(variables);
-  if (!v) return null;
-  const key = SEARCH_TEXT_KEYS.find((k) => typeof v[k] === 'string');
-  return key ? { ...v, [key]: '' } : null;
+export function searchParams(text: string): Record<string, string> {
+  return { mode: 'universal', query: text, show_threads: 'true' };
 }
 
 const looksLikeUser = (o: Record<string, unknown>): boolean => typeof o.username === 'string' && (typeof o.pk === 'string' || typeof o.id === 'string');
 
-/** People from every result list in the search response (contacts, Instagram users, …), once each. */
+/** People in the search response (`ranked_recipients[].user`, and any other list of users), once each. */
 export function extractSearchUsers(data: unknown): unknown[] {
-  const root = obj(obj(data)?.xfb_combinedIGSearchQuery) ?? obj(data);
+  const root = obj(data);
   const out: Record<string, unknown>[] = [];
   const seen = new Set<string>();
+  // The real response: each ranked recipient is either { user } or { thread } (a group, whose members aren't hits).
+  if (Array.isArray(root?.ranked_recipients)) {
+    for (const item of root.ranked_recipients) {
+      const thread = obj(obj(item)?.thread);
+      const members = arr(thread?.users);
+      // A one-to-one chat stands for the other person; a group's members are not search hits.
+      const u = obj(obj(item)?.user) ?? (thread && thread.is_group !== true && members.length === 1 ? obj(members[0]) : undefined);
+      if (!u || !looksLikeUser(u)) continue;
+      const id = String(u.pk ?? u.id);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(u);
+    }
+    return out;
+  }
   const walk = (v: unknown, depth: number): void => {
     if (depth > 6) return;
     if (Array.isArray(v)) return v.forEach((x) => walk(x, depth + 1));

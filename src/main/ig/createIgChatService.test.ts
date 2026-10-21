@@ -106,19 +106,6 @@ describe('createIgChatService', () => {
     service.stop();
   });
 
-  it("fills in the people-search id from the page's own module loader, then searches", async () => {
-    const { service, engine } = wire();
-    engine.page.handler = (script: string) => (script.includes('IGDOmniPickerSearchResultsListQuery_instagramRelayOperation') ? '24681357911' : 'live');
-    service.start();
-    await flush();
-    engine.setState('ready');
-    // Exec has no seed id for the search, so the page's loader is asked before anything is sent.
-    const search = service.searchPeople('alex').catch(() => {});
-    await vi.waitFor(() => expect(engine.page.scripts.some((s) => s.includes('requireLazy'))).toBe(true), { timeout: 3000 });
-    service.stop();
-    void search;
-  });
-
   it('runs the logout hook (media cache wipe) after the account is logged out', async () => {
     const onLogout = vi.fn(async () => {});
     const { service, engine } = wire({ onLogout });

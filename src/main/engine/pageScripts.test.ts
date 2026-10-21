@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CLICK_SEND_SCRIPT, docIdLookupScript, clickThreadLinkScript, pathMatchesThread, setFileOnPageInput, threadPathFor, waitForThreadUrl } from './pageScripts';
+import { CLICK_SEND_SCRIPT, clickThreadLinkScript, pathMatchesThread, setFileOnPageInput, threadPathFor, waitForThreadUrl } from './pageScripts';
 import { FakeCdp } from './testing';
 
 const run = (script: string): unknown => (0, eval)(script);
@@ -92,41 +92,3 @@ describe('page scripts', () => {
   });
 });
 
-
-describe('docIdLookupScript', () => {
-  const win = window as unknown as Record<string, unknown>;
-  const run = (name: string): Promise<unknown> => (0, eval)(docIdLookupScript(name, 50)) as Promise<unknown>;
-
-  it('reads an operation module the page already has', async () => {
-    win.require = (n: string) => (n === 'Op_instagramRelayOperation' ? '1234567890' : undefined);
-    win.requireLazy = undefined;
-    expect(await run('Op')).toBe('1234567890');
-  });
-
-  it("asks the page's own lazy loader for a module it has not loaded yet", async () => {
-    win.require = () => {
-      throw new Error('not defined');
-    };
-    const asked: string[][] = [];
-    win.requireLazy = (names: string[], cb: (m: unknown) => void) => {
-      asked.push(names);
-      setTimeout(() => cb('987654321'), 0);
-    };
-    expect(await run('Op')).toBe('987654321');
-    expect(asked).toEqual([['Op_instagramRelayOperation']]);
-  });
-
-  it('gives up quietly: no loader, a timeout, or something that is not an id', async () => {
-    win.require = undefined;
-    win.requireLazy = undefined;
-    expect(await run('Op')).toBeNull();
-    win.requireLazy = () => {};
-    expect(await run('Op')).toBeNull();
-    win.require = () => ({ not: 'an id' });
-    expect(await run('Op')).toBeNull();
-  });
-
-  it('embeds the name safely', () => {
-    expect(docIdLookupScript('a"); alert(1); ("', 10)).not.toContain('alert');
-  });
-});

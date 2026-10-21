@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ServiceError } from '../chatService';
 import { DocIdRegistry } from './docIds';
-import { Exec } from './exec';
+import { Exec, fetchScript } from './exec';
 import { parseForm } from './graphql';
 import { FakePage } from './testing';
 import type { Envelope } from './types';
@@ -139,5 +139,51 @@ describe('Exec', () => {
     const quick = new Exec(page, tap, new DocIdRegistry(), { envelopeWaitMs: 1000, jitterMs: () => 0, sleep: async () => {} });
     await expect(quick.run('IGDirectTextSendMutation', {})).rejects.toMatchObject({ code: 'EngineNotReady' });
     expect(page.scripts).toHaveLength(0);
+  });
+});
+
+describe('Exec REST reads', () => {
+  it("sends a same-origin GET shaped like the page's own, and unwraps the payload", async () => {
+    tap.envelope = { form: { fb_dtsg: 'DTSG', lsd: 'LSD', __d: 'www', __user: '0', __comet_req: '7', jazoest: '123', __crn: 'comet.igweb.Route' }, headers: { 'X-IG-App-ID': '936', 'X-FB-LSD': 'LSD', 'X-CSRFToken': 'csrf' } };
+    page.handler = () => ({ status: 200, url: 'https://www.instagram.com/api/v1/direct_v2/ranked_recipients/', text: 'for (;;);{"payload":{"ranked_recipients":[]}}' });
+    expect(await exec.get('/api/v1/direct_v2/ranked_recipients/', { mode: 'universal', query: 'al ex', show_threads: 'true' })).toEqual({ ranked_recipients: [] });
+    const req = requestOf(page.scripts[0]!);
+    expect(page.scripts[0]).toContain("method: 'GET'");
+    const url = new URL(req.path, 'https://www.instagram.com');
+    expect(url.pathname).toBe('/api/v1/direct_v2/ranked_recipients/');
+    expect(Object.fromEntries(url.searchParams)).toMatchObject({ mode: 'universal', query: 'al ex', show_threads: 'true', __d: 'www', __user: '0', __a: '1', __comet_req: '7', jazoest: '123', __crn: 'comet.igweb.Route' });
+    // POST-only tokens stay out of the URL; the page's headers go along, minus the GraphQL-only LSD one.
+    expect(url.searchParams.has('fb_dtsg')).toBe(false);
+    expect(url.searchParams.has('lsd')).toBe(false);
+    expect(req.headers).toEqual({ 'X-Requested-With': 'XMLHttpRequest', 'X-IG-App-ID': '936', 'X-CSRFToken': 'csrf' });
+  });
+
+  it('classifies REST failures like GraphQL ones and refuses paths outside /api/v1', async () => {
+    page.handler = () => ({ status: 400, url: 'https://www.instagram.com/api/v1/x/', text: '{"message":"login_required","status":"fail"}' });
+    await expect(exec.get('/api/v1/direct_v2/ranked_recipients/', { query: 'a' })).rejects.toMatchObject({ code: 'AuthExpired' });
+    await expect(exec.get('https://evil.example/api/v1/x/', {})).rejects.toBeInstanceOf(ServiceError);
+    await expect(exec.get('/api/v1/../../x/', {})).rejects.toBeInstanceOf(ServiceError);
+  });
+});
+
+describe('fetchScript GET token', () => {
+  it("adds the page's own async GET token inside the page, never passing it through main", async () => {
+    const calls: string[] = [];
+    const w = window as unknown as Record<string, unknown>;
+    w.require = (n: string) => (n === 'DTSGInitData' ? { async_get_token: 'TOK:EN' } : undefined);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string) => {
+      calls.push(url);
+      return { status: 200, url, text: async () => '{}' };
+    }) as unknown as typeof fetch;
+    try {
+      const script = fetchScript({ path: '/api/v1/x/?a=1', body: '', headers: {}, method: 'GET' });
+      expect(script).not.toContain('TOK');
+      await (0, eval)(script);
+      expect(calls).toEqual(['/api/v1/x/?a=1&fb_dtsg_ag=TOK%3AEN']);
+    } finally {
+      globalThis.fetch = realFetch;
+      w.require = undefined;
+    }
   });
 });

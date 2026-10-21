@@ -3,7 +3,6 @@ import { DocIdRegistry } from '../engine/docIds';
 import { EngineWindow, type EngineOptions } from '../engine/engineWindow';
 import { Exec } from '../engine/exec';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { DOC_ID_DIAG_SCRIPT, docIdLookupScript } from '../engine/pageScripts';
 import { RelayFeed } from '../engine/relayFeed';
 import { Tap } from '../engine/tap';
 import type { EngineLike, PageLike } from '../engine/types';
@@ -104,25 +103,6 @@ export function createIgChatService(opts: CreateOptions): { service: IgChatServi
     store,
     cache: new AccountCache(join(opts.userDataDir, 'accounts', 'default')),
     tmpDir: opts.tmpDir,
-    resolveDocId: async (name) => {
-      if (engine.state !== 'ready') return false;
-      const id = await engine.page.evaluate<unknown>(docIdLookupScript(name)).catch(() => null);
-      if (typeof id !== 'string' || !/^[0-9]{5,25}$/.test(id)) {
-        // Shape-only diagnostics (module-system types and operation names), so a failure can be understood.
-        const diag = await engine.page.evaluate<unknown>(DOC_ID_DIAG_SCRIPT).catch((e: unknown) => String(e));
-        console.warn('[igchat] could not find the id for', name, JSON.stringify(diag));
-        return false;
-      }
-      docIds.scrape(name, id);
-      return docIds.get(name) !== null;
-    },
-    searchTemplate: {
-      load: () => JSON.parse(readFileSync(join(opts.userDataDir, 'search-vars.json'), 'utf8')) as Record<string, unknown>,
-      save: (template) => {
-        mkdirSync(opts.userDataDir, { recursive: true });
-        writeFileSync(join(opts.userDataDir, 'search-vars.json'), JSON.stringify(template, null, 2));
-      }
-    },
     onLogout: opts.onLogout
   });
   return { service, store };

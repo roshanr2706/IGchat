@@ -3,7 +3,7 @@ import type { DocIdRegistry } from './docIds';
 import { buildGraphQLRequest, classifyGraphQLFailure, parseGraphQLText } from './graphql';
 import type { Envelope, PageLike } from './types';
 
-type PageRequest = { path: string; body: string; headers: Record<string, string> };
+type PageRequest = { path: string; body: string; headers: Record<string, string>; method?: 'POST' | 'GET' };
 type PageResponse = { status: number; url: string; text: string };
 
 const DEFAULT_TIMEOUT_MS = 20000;
@@ -11,7 +11,7 @@ const GUARD_MARGIN_MS = 2000;
 
 /** The only script exec ever runs in the page: a same-origin fetch with the page's own cookies. Data is passed as JSON. */
 export function fetchScript(req: PageRequest, timeoutMs = DEFAULT_TIMEOUT_MS): string {
-  return `(async (r) => { const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), ${Math.max(1, Math.floor(timeoutMs))}); try { const res = await fetch(r.path, { method: 'POST', credentials: 'include', headers: r.headers, body: r.body, signal: ctl.signal }); return { status: res.status, url: res.url, text: await res.text() }; } catch (e) { return { status: 0, url: '', text: String((e && e.message) || e) }; } finally { clearTimeout(timer); } })(${JSON.stringify(req)})`;
+  return `(async (r) => { const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), ${Math.max(1, Math.floor(timeoutMs))}); try { let path = r.path; if (r.method === 'GET') { let t = null; try { t = window.require('DTSGInitData').async_get_token; } catch (e) {} if (typeof t === 'string' && t) path += '&fb_dtsg_ag=' + encodeURIComponent(t); } const res = await fetch(path, r.method === 'GET' ? { method: 'GET', credentials: 'include', headers: r.headers, signal: ctl.signal } : { method: 'POST', credentials: 'include', headers: r.headers, body: r.body, signal: ctl.signal }); return { status: res.status, url: res.url, text: await res.text() }; } catch (e) { return { status: 0, url: '', text: String((e && e.message) || e) }; } finally { clearTimeout(timer); } })(${JSON.stringify(req)})`;
 }
 
 export type ExecOptions = {
@@ -23,6 +23,23 @@ export type ExecOptions = {
 };
 
 const POLL_MS = 250;
+
+/** Session fields the page itself adds to its REST (`/api/v1/…`) GETs, copied from its own GraphQL envelope. */
+const REST_QUERY_KEYS = ['__d', '__user', '__a', '__hs', 'dpr', '__ccg', '__rev', '__s', '__hsi', '__dyn', '__csr', '__hsdp', '__hblp', '__sjsp', '__comet_req', 'jazoest', '__spin_r', '__spin_b', '__spin_t', '__crn'];
+
+/** A same-origin REST GET shaped like the page's own: its params, its session fields, its headers. */
+export function buildRestRequest(envelope: Envelope, path: string, params: Record<string, string>, req: number): PageRequest {
+  const query = new URLSearchParams(params);
+  for (const k of REST_QUERY_KEYS) {
+    const v = envelope.form[k];
+    if (v !== undefined) query.set(k, v);
+  }
+  if (!query.has('__a')) query.set('__a', '1');
+  query.set('__req', req.toString(36));
+  const headers: Record<string, string> = { 'X-Requested-With': 'XMLHttpRequest' };
+  for (const [k, v] of Object.entries(envelope.headers)) if (k !== 'X-FB-LSD') headers[k] = v;
+  return { path: `${path}?${query.toString()}`, body: '', headers, method: 'GET' };
+}
 
 export class Exec {
   private chain: Promise<unknown> = Promise.resolve();
@@ -38,6 +55,14 @@ export class Exec {
   /** Runs one GraphQL operation from inside the engine page. Calls are serialized with 150–400 ms jitter. */
   run<T = unknown>(name: string, variables: unknown): Promise<T> {
     const job = this.chain.then(() => this.runNow<T>(name, variables));
+    this.chain = job.catch(() => {});
+    return job;
+  }
+
+  /** Runs one of the page's REST reads (`/api/v1/…`) from inside the engine page, in the same queue as GraphQL. */
+  get<T = unknown>(path: string, params: Record<string, string>): Promise<T> {
+    if (!/^\/api\/v1\/[a-z0-9_/]+\/$/.test(path)) return Promise.reject(new ServiceError('Unknown', 'Unsupported Instagram request'));
+    const job = this.chain.then(() => this.send<T>(path, (envelope) => buildRestRequest(envelope, path, params, ++this.req), (json) => (json.payload ?? json) as T));
     this.chain = job.catch(() => {});
     return job;
   }
@@ -58,9 +83,13 @@ export class Exec {
   private async runNow<T>(name: string, variables: unknown): Promise<T> {
     const docId = this.docIds.get(name);
     if (!docId) throw new ServiceError('EngineNotReady', `Unknown Instagram operation ${name}`);
+    return this.send<T>(name, (envelope) => buildGraphQLRequest(envelope, name, docId, variables, ++this.req), (json) => (json.data ?? null) as T);
+  }
+
+  private async send<T>(name: string, build: (envelope: Envelope) => PageRequest, pick: (json: Record<string, unknown>) => T): Promise<T> {
     const envelope = await this.waitForEnvelope();
     await this.sleep((this.opts.jitterMs ?? (() => 150 + Math.random() * 250))());
-    const req = buildGraphQLRequest(envelope, name, docId, variables, ++this.req);
+    const req = build(envelope);
     const timeout = this.opts.fetchTimeoutMs ?? DEFAULT_TIMEOUT_MS;
     let res: PageResponse;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -89,6 +118,6 @@ export class Exec {
     // Every classified HTTP answer (4xx/5xx, login or challenge redirect, GraphQL errors) is a definite failure.
     if (code) throw new ServiceError(code, `${name} failed (${res?.status ?? 0})`, !res || res.status === 0 || res.status === 502 || res.status === 503 || res.status === 504);
     if (!json) throw new ServiceError('Unknown', `${name} returned an unreadable response`, true);
-    return (json.data ?? null) as T;
+    return pick(json);
   }
 }

@@ -8,7 +8,7 @@ import { Emitter } from '../emitter';
 import type { EngineLike, RelaySnapshot } from '../engine/types';
 import threadList from './__fixtures__/threadList.json';
 import messageList from './__fixtures__/messageList.json';
-import { OPS } from './ops';
+import { OPS, SEARCH_PATH } from './ops';
 import { IgChatService, type CacheLike, type ExecLike, type RelayLike } from './service';
 import { IgStore } from './store';
 
@@ -73,6 +73,9 @@ class FakeExec implements ExecLike {
     const h = this.handlers[name];
     if (!h) throw new ServiceError('Unknown', `no handler for ${name}`);
     return h(variables as Record<string, unknown>) as T;
+  }
+  async get<T>(path: string, params: Record<string, string>): Promise<T> {
+    return this.run<T>(path, params);
   }
 }
 
@@ -663,7 +666,7 @@ describe('IgChatService live data', () => {
   });
 });
 
-const searchResult = (users: unknown[]) => ({ xfb_combinedIGSearchQuery: { search_messenger_contact_v2: users } });
+const searchResult = (users: unknown[]) => ({ ranked_recipients: users.map((user) => ({ user })) });
 
 describe('IgChatService people search', () => {
   beforeEach(async () => {
@@ -671,52 +674,13 @@ describe('IgChatService people search', () => {
   });
 
   it('searches Instagram for people', async () => {
-    exec.handlers[OPS.search] = (v) => {
-      expect(v).toEqual({ search_text: 'alex' });
+    exec.handlers[SEARCH_PATH] = (v) => {
+      expect(v).toEqual({ mode: 'universal', query: 'alex', show_threads: 'true' });
       return searchResult([{ pk: '9000000002', username: 'alex_r', full_name: 'Alex Rivera', profile_pic_url: 'https://scontent.cdninstagram.com/a.jpg', is_verified: false }, { username: 'no-id' }]);
     };
     const people = await svc.searchPeople('alex');
     expect(people).toEqual([expect.objectContaining({ id: '9000000002', username: 'alex_r' })]);
     expect(await svc.searchPeople(' ')).toEqual([]);
-  });
-
-  it("asks the page for the search operation's id when it has not seen it, then searches", async () => {
-    let known = false;
-    exec.handlers[OPS.search] = () => {
-      if (!known) throw new ServiceError('EngineNotReady', 'Unknown Instagram operation IGDOmniPickerSearchResultsListQuery');
-      return searchResult([{ pk: '9000000002', username: 'alex_r', full_name: 'Alex Rivera' }]);
-    };
-    const resolveDocId = vi.fn(async (name: string) => {
-      expect(name).toBe(OPS.search);
-      known = true;
-      return true;
-    });
-    const s = new IgChatService({ engine, relay, exec, store, tmpDir: tmp, now: () => NOW, sleep: async () => {}, timeouts: { ready: 50 }, resolveDocId });
-    expect(await s.searchPeople('alex')).toEqual([expect.objectContaining({ username: 'alex_r' })]);
-    expect(resolveDocId).toHaveBeenCalledTimes(1);
-  });
-
-  it('still reports search as unavailable when the page cannot supply the id', async () => {
-    exec.handlers[OPS.search] = () => {
-      throw new ServiceError('EngineNotReady', 'Unknown Instagram operation IGDOmniPickerSearchResultsListQuery');
-    };
-    const s = new IgChatService({ engine, relay, exec, store, tmpDir: tmp, now: () => NOW, sleep: async () => {}, timeouts: { ready: 50 }, resolveDocId: async () => false });
-    await expect(s.searchPeople('alex')).rejects.toMatchObject({ message: "People search isn't available yet" });
-  });
-
-  it("learns the search variables from the page's own search and uses them", async () => {
-    const saved: unknown[] = [];
-    const s = new IgChatService({ engine, relay, exec, store, tmpDir: tmp, now: () => NOW, sleep: async () => {}, timeouts: { ready: 50 }, searchTemplate: { load: () => null, save: (v) => void saved.push(v) } });
-    s.applyObservation({ name: OPS.search, docId: '1', variables: { search_text: 'someone', num_results: 30, surface: 'omni' }, data: searchResult([]) });
-    expect(saved).toEqual([{ search_text: '', num_results: 30, surface: 'omni' }]);
-    exec.handlers[OPS.search] = (v) => {
-      expect(v).toEqual({ search_text: 'alex', num_results: 30, surface: 'omni' });
-      return searchResult([{ pk: '9000000002', username: 'alex_r', full_name: 'Alex Rivera' }]);
-    };
-    expect(await s.searchPeople('alex')).toHaveLength(1);
-    // Remembered across restarts.
-    const again = new IgChatService({ engine, relay, exec, store, tmpDir: tmp, now: () => NOW, sleep: async () => {}, timeouts: { ready: 50 }, searchTemplate: { load: () => saved[0] as Record<string, unknown>, save: () => {} } });
-    expect(await again.searchPeople('alex')).toHaveLength(1);
   });
 
   it('opens an existing DM with a person without navigating', async () => {
@@ -727,7 +691,7 @@ describe('IgChatService people search', () => {
   });
 
   it('opens a DM it did not know through the page, creating a placeholder thread', async () => {
-    exec.handlers[OPS.search] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend', is_verified: false }]);
+    exec.handlers[SEARCH_PATH] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend', is_verified: false }]);
     await svc.searchPeople('new');
     engine.userThreads.new_friend = '1000000000000077';
     const t = await svc.openThreadWithUser('9000000077');
@@ -738,13 +702,13 @@ describe('IgChatService people search', () => {
 
   it('fails clearly when the person is unknown or Instagram cannot open the chat', async () => {
     await expect(svc.openThreadWithUser('nobody')).rejects.toMatchObject({ code: 'NotFound' });
-    exec.handlers[OPS.search] = () => searchResult([{ pk: '9000000088', username: 'ghost', full_name: '' }]);
+    exec.handlers[SEARCH_PATH] = () => searchResult([{ pk: '9000000088', username: 'ghost', full_name: '' }]);
     await svc.searchPeople('ghost');
     await expect(svc.openThreadWithUser('9000000088')).rejects.toMatchObject({ code: 'Unknown' });
   });
 
   it('does not navigate the page while an image is being handed over', async () => {
-    exec.handlers[OPS.search] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend' }]);
+    exec.handlers[SEARCH_PATH] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend' }]);
     await svc.searchPeople('new');
     let release: () => void = () => {};
     let attaching = false;
@@ -762,7 +726,7 @@ describe('IgChatService people search', () => {
   });
 
   it('keeps later real-thread ingestion working after a placeholder', async () => {
-    exec.handlers[OPS.search] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend' }]);
+    exec.handlers[SEARCH_PATH] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend' }]);
     await svc.searchPeople('new');
     engine.userThreads.new_friend = '1000000000000077';
     await svc.openThreadWithUser('9000000077');
@@ -774,20 +738,13 @@ describe('IgChatService people search', () => {
   });
 
   it('shares one request between identical concurrent searches', async () => {
-    exec.handlers[OPS.search] = () => searchResult([{ pk: '9000000077', username: 'new_friend' }]);
+    exec.handlers[SEARCH_PATH] = () => searchResult([{ pk: '9000000077', username: 'new_friend' }]);
     const [a, b] = await Promise.all([svc.searchPeople('new'), svc.searchPeople('new ')]);
     expect(a).toEqual(b);
-    expect(exec.calls.filter((c) => c.name === OPS.search)).toHaveLength(1);
+    expect(exec.calls.filter((c) => c.name === SEARCH_PATH)).toHaveLength(1);
   });
-  it('reports a distinct error when the search operation is not known yet', async () => {
-    exec.handlers[OPS.search] = () => {
-      throw new ServiceError('EngineNotReady', 'Unknown Instagram operation ' + OPS.search);
-    };
-    await expect(svc.searchPeople('alex')).rejects.toMatchObject({ code: 'EngineNotReady', message: "People search isn't available yet" });
-  });
-
   it('a late person-open does not take over the active thread after a newer selection', async () => {
-    exec.handlers[OPS.search] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend' }]);
+    exec.handlers[SEARCH_PATH] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend' }]);
     await svc.searchPeople('new');
     let finish: (id: string) => void = () => {};
     let started = false;
@@ -805,7 +762,7 @@ describe('IgChatService people search', () => {
   });
 
   it('refuses with RateLimited when the engine has spent its person-open budget', async () => {
-    exec.handlers[OPS.search] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend' }]);
+    exec.handlers[SEARCH_PATH] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend' }]);
     await svc.searchPeople('new');
     engine.canOpen = false;
     await expect(svc.openThreadWithUser('9000000077')).rejects.toMatchObject({ code: 'RateLimited' });
@@ -813,7 +770,7 @@ describe('IgChatService people search', () => {
   });
 
   it('passes through AuthExpired from a login wall during the hop', async () => {
-    exec.handlers[OPS.search] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend' }]);
+    exec.handlers[SEARCH_PATH] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend' }]);
     await svc.searchPeople('new');
     engine.openUserThread = async () => {
       throw new ServiceError('AuthExpired', 'Log in to Instagram');
