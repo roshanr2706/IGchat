@@ -2,7 +2,7 @@
 
 A lightweight, Discord-style desktop client for Instagram DMs and group chats, built with Electron + Svelte 5.
 
-> **Status:** UI complete against a built-in mock backend. The Instagram connection (login, sync, media) is Plan 2 — see `docs/superpowers/specs/2026-10-08-igchat-design.md`.
+> **Status:** Talks to your real Instagram account through a hidden window running Instagram's own web app (you log in on Instagram's own page; IGchat never sees your password). `npm run dev:mock` runs the UI against a fake in-memory backend instead.
 >
 > Third-party Instagram clients are against Instagram's Terms of Use. This is a personal-use tool; use it at your own risk.
 
@@ -23,7 +23,7 @@ On a fresh clone, if npm's script policy blocks Electron's postinstall, the `ele
 node node_modules/electron/install.js
 ```
 
-The mock backend generates 30 conversations, sends an incoming message every ~20 seconds, and fails any message containing `[fail]` so you can try the retry flow.
+`npm run dev:mock` uses the built-in mock backend: 30 fake conversations, an incoming message every ~20 seconds, and any message containing `[fail]` fails so you can try the retry flow.
 
 ## Keyboard shortcuts
 

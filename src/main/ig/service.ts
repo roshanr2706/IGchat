@@ -27,6 +27,8 @@ export interface CacheLike {
   loadThreads(): Thread[];
   saveThreads(threads: Thread[]): void;
   clear(): void;
+  /** Writes any debounced save now (on quit). */
+  flush?(): void;
 }
 
 export type IgServiceDeps = {
@@ -36,6 +38,8 @@ export type IgServiceDeps = {
   store: IgStore;
   cache?: CacheLike;
   tmpDir: string;
+  /** Extra per-account cleanup after logout (e.g. wiping cached media). */
+  onLogout?: () => Promise<void> | void;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   timeouts?: Partial<{ ready: number; openThread: number; imageEcho: number; sendEcho: number; maybeGrace: number; attach: number; attachHold: number }>;
@@ -127,6 +131,7 @@ export class IgChatService implements ChatService {
     this.flushDeferred();
     this.offs.forEach((off) => off());
     this.offs = [];
+    this.deps.cache?.flush?.();
     this.deps.engine.stop();
   }
 
@@ -595,6 +600,7 @@ export class IgChatService implements ChatService {
     this.pagedPast = false;
     this.inboxCursor = null;
     this.inboxHasMore = false;
+    await Promise.resolve(this.deps.onLogout?.()).catch(() => {});
     this.emitStatus();
   }
 

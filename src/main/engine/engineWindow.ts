@@ -29,7 +29,7 @@ export function cdpFromDebugger(dbg: Debugger): CdpLike {
   };
 }
 
-type EngineEvents = { state: (s: EngineState) => void; loaded: () => void };
+type EngineEvents = { state: (s: EngineState) => void; loaded: () => void; hidden: () => void };
 export type EngineOptions = {
   /** Runs once CDP is attached (on about:blank) and before Instagram loads: start the tap and relay binding here. */
   beforeLoad?: (cdp: CdpLike, page: PageLike) => Promise<void>;
@@ -161,6 +161,8 @@ export class EngineWindow implements EngineLike {
       if (!this.quitting) {
         event.preventDefault();
         win.hide();
+        // The user may have just finished a login or checkpoint step in this window.
+        this.events.emit('hidden');
       }
     });
     try {
