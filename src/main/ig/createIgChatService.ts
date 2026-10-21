@@ -116,6 +116,13 @@ export function createIgChatService(opts: CreateOptions): { service: IgChatServi
       docIds.scrape(name, id);
       return docIds.get(name) !== null;
     },
+    searchTemplate: {
+      load: () => JSON.parse(readFileSync(join(opts.userDataDir, 'search-vars.json'), 'utf8')) as Record<string, unknown>,
+      save: (template) => {
+        mkdirSync(opts.userDataDir, { recursive: true });
+        writeFileSync(join(opts.userDataDir, 'search-vars.json'), JSON.stringify(template, null, 2));
+      }
+    },
     onLogout: opts.onLogout
   });
   return { service, store };

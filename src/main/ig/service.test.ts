@@ -704,6 +704,21 @@ describe('IgChatService people search', () => {
     await expect(s.searchPeople('alex')).rejects.toMatchObject({ message: "People search isn't available yet" });
   });
 
+  it("learns the search variables from the page's own search and uses them", async () => {
+    const saved: unknown[] = [];
+    const s = new IgChatService({ engine, relay, exec, store, tmpDir: tmp, now: () => NOW, sleep: async () => {}, timeouts: { ready: 50 }, searchTemplate: { load: () => null, save: (v) => void saved.push(v) } });
+    s.applyObservation({ name: OPS.search, docId: '1', variables: { search_text: 'someone', num_results: 30, surface: 'omni' }, data: searchResult([]) });
+    expect(saved).toEqual([{ search_text: '', num_results: 30, surface: 'omni' }]);
+    exec.handlers[OPS.search] = (v) => {
+      expect(v).toEqual({ search_text: 'alex', num_results: 30, surface: 'omni' });
+      return searchResult([{ pk: '9000000002', username: 'alex_r', full_name: 'Alex Rivera' }]);
+    };
+    expect(await s.searchPeople('alex')).toHaveLength(1);
+    // Remembered across restarts.
+    const again = new IgChatService({ engine, relay, exec, store, tmpDir: tmp, now: () => NOW, sleep: async () => {}, timeouts: { ready: 50 }, searchTemplate: { load: () => saved[0] as Record<string, unknown>, save: () => {} } });
+    expect(await again.searchPeople('alex')).toHaveLength(1);
+  });
+
   it('opens an existing DM with a person without navigating', async () => {
     const t = await svc.openThreadWithUser('9000000002');
     expect(t.id).toBe(T1);

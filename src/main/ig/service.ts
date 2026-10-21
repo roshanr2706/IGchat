@@ -10,7 +10,7 @@ import type { EngineLike, GraphQLObservation, RelayDelta, RelaySnapshot } from '
 import { normalizeUser } from './normalize';
 import {
   editVars, extractEditResult, extractMessageListPage, extractReactions, extractSearchUsers, extractSendResult, extractThreadListPage, extractUnsendResult,
-  generateOtid, messageListVars, OPS, reactVars, searchVars, sendTextVars, threadListVars, unsendVars
+  generateOtid, messageListVars, OPS, reactVars, searchTemplateOf, searchVars, sendTextVars, threadListVars, unsendVars
 } from './ops';
 import type { IgStore } from './store';
 
@@ -40,6 +40,8 @@ export type IgServiceDeps = {
   tmpDir: string;
   /** Asks the page for an operation's doc id it has not used yet (loads the page's own module). True if found. */
   resolveDocId?: (name: string) => Promise<boolean>;
+  /** Where the page's own people-search variables (text blanked) are remembered between runs. */
+  searchTemplate?: { load(): Record<string, unknown> | null; save(template: Record<string, unknown>): void };
   /** Extra per-account cleanup after logout (e.g. wiping cached media). */
   onLogout?: () => Promise<void> | void;
   now?: () => number;
@@ -54,6 +56,13 @@ const MAX_TRACKED = 200;
 const IMAGE_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
 const POLL_MS = 100;
 const MAX_SEARCH_CHARS = 100;
+
+/** Keys and array lengths only (never values), for diagnosing an unexpected response. */
+function shapeOf(v: unknown, depth = 0): unknown {
+  if (Array.isArray(v)) return depth > 3 ? `[${v.length}]` : [`len ${v.length}`, ...(v.length ? [shapeOf(v[0], depth + 1)] : [])];
+  if (v && typeof v === 'object') return depth > 3 ? '{…}' : Object.fromEntries(Object.entries(v).slice(0, 20).map(([k, x]) => [k, shapeOf(x, depth + 1)]));
+  return typeof v;
+}
 
 const messageIdOf = (node: unknown): string | undefined => {
   const r = node && typeof node === 'object' ? (node as Record<string, unknown>) : null;
@@ -81,7 +90,16 @@ export class IgChatService implements ChatService {
   /** Bumped by every explicit thread selection; a slower person-open must not override a newer choice. */
   private selectSeq = 0;
 
-  constructor(private readonly deps: IgServiceDeps) {}
+  /** The variables Instagram's own search box sends, so our searches look and behave the same. */
+  private searchTemplate: Record<string, unknown> | null = null;
+
+  constructor(private readonly deps: IgServiceDeps) {
+    try {
+      this.searchTemplate = searchTemplateOf(deps.searchTemplate?.load() ?? null);
+    } catch {
+      this.searchTemplate = null;
+    }
+  }
 
   get isFocused(): boolean {
     return this.focused;
@@ -323,14 +341,14 @@ export class IgChatService implements ChatService {
     const unknownOp = (err: unknown): boolean => err instanceof ServiceError && err.code === 'EngineNotReady' && /^Unknown Instagram operation/.test(err.message);
     let data: unknown;
     try {
-      data = await this.deps.exec.run(OPS.search, searchVars(text));
+      data = await this.deps.exec.run(OPS.search, searchVars(text, this.searchTemplate));
     } catch (err) {
       // exec reports an operation whose doc id was never seen or scraped. The search UI's module is loaded lazily by
       // Instagram, so ask the page for it once (as opening its "new message" dialog would) and try again.
       if (!unknownOp(err)) throw err;
       if (!(await this.deps.resolveDocId?.(OPS.search).catch(() => false))) throw new ServiceError('EngineNotReady', "People search isn't available yet");
       try {
-        data = await this.deps.exec.run(OPS.search, searchVars(text));
+        data = await this.deps.exec.run(OPS.search, searchVars(text, this.searchTemplate));
       } catch (again) {
         if (unknownOp(again)) throw new ServiceError('EngineNotReady', "People search isn't available yet");
         throw again;
@@ -339,6 +357,7 @@ export class IgChatService implements ChatService {
     const users = extractSearchUsers(data)
       .map((raw) => normalizeUser(raw)?.user)
       .filter((u): u is User => !!u && !!u.username);
+    if (!users.length) console.info('[igchat] people search found nobody; response shape:', JSON.stringify(shapeOf(data)), 'learned variables:', Boolean(this.searchTemplate));
     users.forEach((u) => this.store.rememberUser(u));
     return users;
   }
@@ -678,6 +697,16 @@ export class IgChatService implements ChatService {
     if (o.name === OPS.threadList) {
       if (typeof vars.id === 'string') this.store.setViewerFbid(vars.id);
       this.store.ingestThreads(extractThreadListPage(o.data).nodes);
+    } else if (o.name === OPS.search) {
+      const template = searchTemplateOf(o.variables);
+      if (template && JSON.stringify(template) !== JSON.stringify(this.searchTemplate)) {
+        this.searchTemplate = template;
+        try {
+          this.deps.searchTemplate?.save(template);
+        } catch {
+          // Remembering is best effort.
+        }
+      }
     } else if (o.name === OPS.messageList) {
       this.store.ingestMessages(extractMessageListPage(o.data).nodes, typeof vars.id === 'string' ? { threadId: vars.id } : {});
     }

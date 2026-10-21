@@ -51,7 +51,23 @@ describe('ops', () => {
   it('builds and reads the people search', () => {
     expect(OPS.search).toBe('IGDOmniPickerSearchResultsListQuery');
     expect(searchVars('alex')).toEqual({ search_text: 'alex' });
-    expect(extractSearchUsers({ xfb_combinedIGSearchQuery: { search_messenger_contact_v2: [{ pk: '1' }, { pk: '2' }] } })).toHaveLength(2);
+    expect(extractSearchUsers({ xfb_combinedIGSearchQuery: { search_messenger_contact_v2: [{ pk: '1', username: 'a' }, { pk: '2', username: 'b' }] } })).toHaveLength(2);
     expect(extractSearchUsers(null)).toEqual([]);
+  });
+
+  it('collects people from every result list, including wrapped users, once each', () => {
+    const data = {
+      xfb_combinedIGSearchQuery: {
+        search_messenger_contact_v2: [{ pk: '1', username: 'a' }],
+        search_ig_users: { edges: [{ node: { user: { pk: '2', username: 'b' } } }, { node: { pk: '1', username: 'a' } }] },
+        other: [{ title: 'not a person' }]
+      }
+    };
+    expect((extractSearchUsers(data) as { pk: string }[]).map((u) => u.pk)).toEqual(['1', '2']);
+  });
+
+  it("copies the page's own search variables, replacing only the text", () => {
+    expect(searchVars('alex', { search_text: 'old', num_results: 20, surface: 'omnipicker' })).toEqual({ search_text: 'alex', num_results: 20, surface: 'omnipicker' });
+    expect(searchVars('alex', { query: 'old', count: 5 })).toEqual({ query: 'alex', count: 5 });
   });
 });

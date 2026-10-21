@@ -107,10 +107,46 @@ export function generateOtid(now: number = Date.now(), rand: () => number = Math
   return `${Math.floor(now)}${String(Math.floor(rand() * 1_000_000)).padStart(6, '0')}`.slice(0, 19).padEnd(19, '0');
 }
 
-export function searchVars(text: string) {
-  return { search_text: text };
+const SEARCH_TEXT_KEYS = ['search_text', 'query', 'search_query', 'text'];
+
+/** Variables for the people search. With the page's own variables as a template, only the typed text changes. */
+export function searchVars(text: string, template?: Record<string, unknown> | null): Record<string, unknown> {
+  if (!template) return { search_text: text };
+  const key = SEARCH_TEXT_KEYS.find((k) => k in template) ?? 'search_text';
+  return { ...template, [key]: text };
 }
 
+/** The page's search variables with the typed text blanked, safe to remember. */
+export function searchTemplateOf(variables: unknown): Record<string, unknown> | null {
+  const v = obj(variables);
+  if (!v) return null;
+  const key = SEARCH_TEXT_KEYS.find((k) => typeof v[k] === 'string');
+  return key ? { ...v, [key]: '' } : null;
+}
+
+const looksLikeUser = (o: Record<string, unknown>): boolean => typeof o.username === 'string' && (typeof o.pk === 'string' || typeof o.id === 'string');
+
+/** People from every result list in the search response (contacts, Instagram users, …), once each. */
 export function extractSearchUsers(data: unknown): unknown[] {
-  return arr(obj(obj(data)?.xfb_combinedIGSearchQuery)?.search_messenger_contact_v2);
+  const root = obj(obj(data)?.xfb_combinedIGSearchQuery) ?? obj(data);
+  const out: Record<string, unknown>[] = [];
+  const seen = new Set<string>();
+  const walk = (v: unknown, depth: number): void => {
+    if (depth > 6) return;
+    if (Array.isArray(v)) return v.forEach((x) => walk(x, depth + 1));
+    const o = obj(v);
+    if (!o) return;
+    const candidate = looksLikeUser(o) ? o : obj(o.user) && looksLikeUser(obj(o.user)!) ? obj(o.user)! : null;
+    if (candidate) {
+      const id = String(candidate.pk ?? candidate.id);
+      if (!seen.has(id)) {
+        seen.add(id);
+        out.push(candidate);
+      }
+      return;
+    }
+    for (const x of Object.values(o)) walk(x, depth + 1);
+  };
+  walk(root, 0);
+  return out;
 }
