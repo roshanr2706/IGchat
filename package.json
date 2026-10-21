@@ -14,6 +14,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.node.json && svelte-check --tsconfig ./tsconfig.web.json --threshold error",
     "dist": "electron-vite build && electron-builder --win",
+    "dist:linux": "electron-vite build && electron-builder --linux",
     "capture": "electron tools/ig-capture/main.js"
   },
   "build": {
@@ -24,6 +25,14 @@
     ],
     "win": {
       "target": "nsis"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Network",
+      "maintainer": "Roshan R"
     }
   },
   "devDependencies": {
