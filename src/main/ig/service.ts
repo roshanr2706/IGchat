@@ -694,6 +694,10 @@ export class IgChatService implements ChatService {
   /** The page's own thread/message queries (seen by the tap): a second source of truth. */
   applyObservation(o: GraphQLObservation): void {
     const vars = (o.variables && typeof o.variables === 'object' ? o.variables : {}) as Record<string, unknown>;
+    // Which request the page's own search sends (names and response shape only; never values).
+    if (/search|omni|picker|typeahead|recipient/i.test(o.name) && !/NullState/.test(o.name)) {
+      console.info('[igchat] page search request:', o.name, 'variables:', JSON.stringify(shapeOf(vars)), 'response:', JSON.stringify(shapeOf(o.data)));
+    }
     if (o.name === OPS.threadList) {
       if (typeof vars.id === 'string') this.store.setViewerFbid(vars.id);
       this.store.ingestThreads(extractThreadListPage(o.data).nodes);
