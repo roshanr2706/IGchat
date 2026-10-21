@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeThread, makeUser } from '../../../shared/test/factories';
 import type { Thread } from '../../../shared/types';
 import { setBridge } from '../lib/api';
@@ -91,6 +91,53 @@ describe('inbox store', () => {
     bridge.emit('sync:status', 'ok');
     await Promise.resolve();
     expect(bridge.calls.filter((c) => c.channel === 'inbox:get').length).toBe(before + 1);
+    off();
+  });
+});
+
+describe('inbox profile', () => {
+  it('asks for the profile again once the backend shows life, if the first ask failed', async () => {
+    let ready = false;
+    bridge = createFakeBridge({
+      'session:me': () => {
+        if (!ready) throw new Error('Instagram is still loading');
+        return makeUser({ id: 'me', username: 'me_real', avatarUrl: 'igmedia://m/x' });
+      },
+      'inbox:get': () => ({ items: [a], hasMore: false })
+    });
+    setBridge(bridge);
+    const off = inbox.subscribe();
+    await inbox.load();
+    expect(inbox.me).toBeNull();
+    ready = true;
+    // Any sign of life (an inbox update, or the status reporting ok again) fetches it.
+    bridge.emit('inbox:updated', [a]);
+    await vi.waitFor(() => expect(inbox.me?.username).toBe('me_real'));
+    off();
+  });
+
+  it('replaces a profile without a photo when a complete one is available', async () => {
+    let withPhoto = false;
+    bridge = createFakeBridge({
+      'session:me': () => makeUser({ id: 'me', username: 'me_real', avatarUrl: withPhoto ? 'igmedia://m/x' : '' }),
+      'inbox:get': () => ({ items: [a], hasMore: false })
+    });
+    setBridge(bridge);
+    const off = inbox.subscribe();
+    await inbox.load();
+    expect(inbox.me?.avatarUrl).toBe('');
+    withPhoto = true;
+    // After a photo-less answer it waits 10 s before asking again.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 11_000);
+    bridge.emit('sync:status', 'ok');
+    vi.useRealTimers();
+    await vi.waitFor(() => expect(inbox.me?.avatarUrl).toBe('igmedia://m/x'));
+    // Once complete, it stops asking.
+    const asked = bridge.calls.filter((c) => c.channel === 'session:me').length;
+    bridge.emit('inbox:updated', [a]);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(bridge.calls.filter((c) => c.channel === 'session:me').length).toBe(asked);
     off();
   });
 });

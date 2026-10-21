@@ -94,6 +94,7 @@ export class IgChatService implements ChatService {
   private readonly searches = new Map<string, Promise<User[]>>();
   /** Bumped by every explicit thread selection; a slower person-open must not override a newer choice. */
   private selectSeq = 0;
+  private lastProfileFetch = Number.NEGATIVE_INFINITY;
 
   constructor(private readonly deps: IgServiceDeps) {}
 
@@ -258,7 +259,11 @@ export class IgChatService implements ChatService {
     await this.ready();
     if (!complete()) await this.loadSnapshot();
     // The live page's viewer record can lack the username, name and photo; the inbox query carries them.
-    if (!complete() && this.store.viewerFbid) await this.fetchInboxPage(null, true, true).catch(() => {});
+    // At most once a minute: an account without a photo never becomes "complete".
+    if (!complete() && this.store.viewerFbid && this.now() - this.lastProfileFetch > 60_000) {
+      this.lastProfileFetch = this.now();
+      await this.fetchInboxPage(null, true, true).catch(() => {});
+    }
     if (this.store.viewer) return this.store.viewer;
     throw new ServiceError('EngineNotReady', 'Instagram is still loading');
   }

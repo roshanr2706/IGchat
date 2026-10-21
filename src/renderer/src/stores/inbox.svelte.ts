@@ -49,6 +49,27 @@ class InboxStore {
     }
   }
 
+  private askingMe: Promise<void> | null = null;
+  private lastAskedMe = 0;
+
+  /**
+   * Fetches the profile if it is missing or has no photo. Called on every sign the backend is usable, so a profile
+   * that wasn't ready at startup still arrives (without it no message counts as yours: "Unknown", no unsend).
+   */
+  ensureMe(): Promise<void> {
+    if (this.me?.avatarUrl || this.askingMe) return this.askingMe ?? Promise.resolve();
+    // After a complete answer without a photo, at most every 10 s (such an account would otherwise ask on every update).
+    if (this.me && Date.now() - this.lastAskedMe < 10_000) return Promise.resolve();
+    this.askingMe = call('session:me')
+      .then((me) => {
+        if (me.avatarUrl || !this.me) this.me = me;
+        if (!me.avatarUrl) this.lastAskedMe = Date.now();
+      })
+      .catch(() => {})
+      .finally(() => (this.askingMe = null));
+    return this.askingMe;
+  }
+
   async loadMore(): Promise<void> {
     if (!this.hasMore || this.loading) return;
     this.loading = true;
@@ -89,12 +110,16 @@ class InboxStore {
 
   subscribe(): () => void {
     const offs = [
-      on('inbox:updated', (threads) => this.applyUpdates(threads)),
+      on('inbox:updated', (threads) => {
+        this.applyUpdates(threads);
+        void this.ensureMe();
+      }),
       on('sync:status', (status) => {
         const was = this.syncStatus;
         this.syncStatus = status;
         // The backend became usable (engine ready, or back after a login): fetch the real inbox.
         if (status === 'ok' && was !== 'ok') void this.load().catch(() => {});
+        else if (status === 'ok') void this.ensureMe();
       })
     ];
     return () => offs.forEach((off) => off());
