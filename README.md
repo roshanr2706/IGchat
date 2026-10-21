@@ -23,7 +23,20 @@ On a fresh clone, if npm's script policy blocks Electron's postinstall, the `ele
 node node_modules/electron/install.js
 ```
 
+`npm run dist:linux` builds the Linux AppImage and `.deb` instead (run it on Linux).
+
 `npm run dev:mock` uses the built-in mock backend: 30 fake conversations, an incoming message every ~20 seconds, and any message containing `[fail]` fails so you can try the retry flow.
+
+## Releases
+
+Pushing a version tag builds the installers on GitHub Actions and publishes them as a GitHub Release ([`.github/workflows/release.yml`](.github/workflows/release.yml)):
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The workflow runs the typecheck and tests, then builds the Windows installer (`.exe`) and the Linux `.deb` and AppImage, and attaches them to a release with notes generated from the commits. The tag sets the version, so `package.json` doesn't need bumping first. The `.exe` isn't code-signed, so Windows SmartScreen warns on first run (**More info → Run anyway**).
 
 ## Keyboard shortcuts
 
