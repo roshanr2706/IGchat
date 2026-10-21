@@ -34,9 +34,28 @@ export class IgStore {
   private readonly knownUsers = new Map<string, User>();
 
   setViewer(user: User, fbid: string | null): void {
-    this.viewer = user;
+    this.mergeViewer(user);
     if (fbid) this.viewerFbid = fbid;
     this.reattribute();
+  }
+
+  /**
+   * Different sources describe the viewer in more or less detail (the live page's record can lack the username,
+   * name and photo). Keep the best of each field; a thinner copy never erases what is known.
+   */
+  private mergeViewer(user: User): void {
+    const v = this.viewer;
+    if (!v || v.id !== user.id) {
+      this.viewer = { ...user };
+      return;
+    }
+    this.viewer = {
+      ...v,
+      username: user.username || v.username,
+      fullName: user.fullName || v.fullName,
+      avatarUrl: user.avatarUrl || v.avatarUrl,
+      verified: v.verified || user.verified
+    };
   }
 
   setViewerFbid(fbid: string): void {
@@ -84,14 +103,9 @@ export class IgStore {
   ingestThreads(raws: unknown[], opts: IngestOptions = {}): Thread[] {
     const all: Thread[] = [];
     const changed: Thread[] = [];
-    if (!this.viewer) {
-      for (const raw of raws) {
-        const v = raw && typeof raw === 'object' ? normalizeUser((raw as Record<string, unknown>).viewer)?.user : undefined;
-        if (v) {
-          this.viewer = v;
-          break;
-        }
-      }
+    for (const raw of raws) {
+      const v = raw && typeof raw === 'object' ? normalizeUser((raw as Record<string, unknown>).viewer)?.user : undefined;
+      if (v && (!this.viewer || v.id === this.viewer.id)) this.mergeViewer(v);
     }
     const knownBefore = this.igidByFbid.size;
     const hadViewer = Boolean(this.viewer && this.viewerFbid);
@@ -99,7 +113,6 @@ export class IgStore {
       const n = normalizeThread(raw, this.viewer?.id ?? null);
       if (!n) continue;
       if (n.viewerFbid && !this.viewerFbid) this.viewerFbid = n.viewerFbid;
-      if (!this.viewer) this.viewer = normalizeUser((raw as Record<string, unknown>).viewer)?.user ?? null;
       for (const u of n.users) if (u.fbid) this.igidByFbid.set(u.fbid, u.user.id);
       this.threadIdByFbid.set(n.fbid, n.thread.id);
       const prev = this.threadsById.get(n.thread.id);

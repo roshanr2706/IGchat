@@ -140,6 +140,14 @@ describe('IgChatService status', () => {
 });
 
 describe('IgChatService reads', () => {
+  it("fills in the profile with one inbox read when the live page's viewer record is thin", async () => {
+    relay.snap = { ...snapshot(), viewer: { id: '9000000001', fbid: '900000000000001' } };
+    const rich = { ...threadNodes[0], viewer: { id: '9000000001', interop_messaging_user_fbid: '900000000000001', username: 'me_real', full_name: 'Me Real' } };
+    exec.handlers[OPS.threadList] = () => ({ fetch__SlideMailbox: { threads_by_folder: { edges: [{ node: { as_ig_direct_thread: rich } }], page_info: { end_cursor: null, has_next_page: false } } } });
+    expect(await svc.me()).toMatchObject({ id: '9000000001', username: 'me_real', fullName: 'Me Real' });
+    expect(exec.calls.map((c) => c.name)).toEqual([OPS.threadList]);
+  });
+
   it('loads me and the inbox from the relay snapshot without any requests', async () => {
     expect((await svc.me()).username).toBe('me');
     const page = await svc.getInbox();

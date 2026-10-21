@@ -37,6 +37,19 @@ describe('IgStore messages', () => {
     store.ingestThreads(threadNodes, { silent: true });
   });
 
+  it('fills in the viewer profile from richer sources instead of keeping the first, thin one', () => {
+    const fresh = new IgStore();
+    // The live page's viewer record can lack the username, name and photo.
+    fresh.setViewer({ id: '9000000001', username: '', fullName: '', avatarUrl: '', verified: false }, '900000000000001');
+    const rich = { ...threadNodes[0], viewer: { id: '9000000001', interop_messaging_user_fbid: '900000000000001', username: 'me_real', full_name: 'Me Real', profile_pic_url: 'https://scontent.cdninstagram.com/v/me.jpg' } };
+    fresh.ingestThreads([rich]);
+    expect(fresh.viewer).toMatchObject({ id: '9000000001', username: 'me_real', fullName: 'Me Real' });
+    expect(fresh.viewer?.avatarUrl).toBeTruthy();
+    // A later thin copy never erases what is known.
+    fresh.setViewer({ id: '9000000001', username: '', fullName: '', avatarUrl: '', verified: false }, null);
+    expect(fresh.viewer).toMatchObject({ username: 'me_real', fullName: 'Me Real' });
+  });
+
   it('re-attributes own messages that arrived before the viewer was known', () => {
     const fresh = new IgStore();
     // A message for an unknown viewer: its sender is only an fbid the store cannot map yet.

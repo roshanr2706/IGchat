@@ -73,3 +73,21 @@ export function docIdLookupScript(operationName: string, timeoutMs = 8000): stri
   } catch (e) { resolve(null); }
 }))()`;
 }
+
+/**
+ * Diagnostics for a failed doc id lookup: only the shape of the page's module system and the names of search-related
+ * operation modules (public code identifiers). Never reads any user data.
+ */
+export const DOC_ID_DIAG_SCRIPT = `(() => {
+  const req = window.require;
+  const dbg = req && req.__debug && typeof req.__debug === 'object' ? req.__debug : null;
+  const mods = dbg && dbg.modules && typeof dbg.modules === 'object' ? Object.keys(dbg.modules) : [];
+  const ops = mods.filter((n) => /_instagramRelayOperation$/.test(n));
+  return {
+    require: typeof req,
+    requireLazy: typeof window.requireLazy,
+    debugModules: mods.length,
+    relayOperations: ops.length,
+    searchOperations: ops.filter((n) => /search|omni|picker|recipient|typeahead/i.test(n)).map((n) => n.replace(/_instagramRelayOperation$/, '')).slice(0, 25)
+  };
+})()`;

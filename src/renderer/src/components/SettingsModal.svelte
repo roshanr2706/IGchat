@@ -106,6 +106,7 @@
 
     <section>
       <h3>Account</h3>
+      <button class="secondary" onclick={() => void call('auth:login').catch(() => ui.toast("Couldn't open Instagram"))}>Open the Instagram window</button>
       <button class="secondary" onclick={() => void logOut()}>Log out of Instagram</button>
     </section>
 

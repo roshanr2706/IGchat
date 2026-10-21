@@ -2,7 +2,8 @@ import { join } from 'node:path';
 import { DocIdRegistry } from '../engine/docIds';
 import { EngineWindow, type EngineOptions } from '../engine/engineWindow';
 import { Exec } from '../engine/exec';
-import { docIdLookupScript } from '../engine/pageScripts';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { DOC_ID_DIAG_SCRIPT, docIdLookupScript } from '../engine/pageScripts';
 import { RelayFeed } from '../engine/relayFeed';
 import { Tap } from '../engine/tap';
 import type { EngineLike, PageLike } from '../engine/types';
@@ -28,7 +29,15 @@ export type CreateOptions = {
 
 /** Builds the Instagram backend: engine window -> tap/relay/exec -> store -> service, plus fallback sync. */
 export function createIgChatService(opts: CreateOptions): { service: IgChatService; store: IgStore } {
-  const docIds = new DocIdRegistry();
+  // Learned operation ids survive restarts (they are public code identifiers, not account data).
+  const docIdFile = join(opts.userDataDir, 'doc-ids.json');
+  const docIds = new DocIdRegistry({
+    load: () => JSON.parse(readFileSync(docIdFile, 'utf8')) as Record<string, string>,
+    save: (all) => {
+      mkdirSync(opts.userDataDir, { recursive: true });
+      writeFileSync(docIdFile, JSON.stringify(all, null, 2));
+    }
+  });
   const store = new IgStore();
   let tap: Tap | null = null;
   let relay: RelayFeed | null = null;
@@ -98,7 +107,12 @@ export function createIgChatService(opts: CreateOptions): { service: IgChatServi
     resolveDocId: async (name) => {
       if (engine.state !== 'ready') return false;
       const id = await engine.page.evaluate<unknown>(docIdLookupScript(name)).catch(() => null);
-      if (typeof id !== 'string' || !/^[0-9]{5,25}$/.test(id)) return false;
+      if (typeof id !== 'string' || !/^[0-9]{5,25}$/.test(id)) {
+        // Shape-only diagnostics (module-system types and operation names), so a failure can be understood.
+        const diag = await engine.page.evaluate<unknown>(DOC_ID_DIAG_SCRIPT).catch((e: unknown) => String(e));
+        console.warn('[igchat] could not find the id for', name, JSON.stringify(diag));
+        return false;
+      }
       docIds.scrape(name, id);
       return docIds.get(name) !== null;
     },

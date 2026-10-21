@@ -242,6 +242,8 @@ export class IgChatService implements ChatService {
     if (this.store.viewer?.username) return this.store.viewer;
     await this.ready();
     await this.loadSnapshot();
+    // The live page's viewer record can lack the username, name and photo; the inbox query carries them.
+    if (!this.store.viewer?.username && this.store.viewerFbid) await this.fetchInboxPage(null, true, true).catch(() => {});
     if (this.store.viewer) return this.store.viewer;
     throw new ServiceError('EngineNotReady', 'Instagram is still loading');
   }
