@@ -628,7 +628,8 @@ export class IgChatService implements ChatService {
 
   /**
    * Instagram removes an unsent message from the thread's message list but may keep its record around, so the bridge
-   * never reports it as removed. Any stored message inside the time span a thread delta lists, but missing from it,
+   * never reports it as removed. The list holds the newest messages, so any stored message newer than its oldest entry
+   * but missing from it (including an unsent newest message, which drops off the top),
    * is a removal candidate (still verified against Instagram before anything is removed).
    */
   private droppedFromThreadLists(threads: unknown[]): { threadId: string; messageId: string; timestamp: number }[] {
@@ -645,9 +646,8 @@ export class IgChatService implements ChatService {
       const threadId = fbid ? this.store.threadIdOf(fbid) : undefined;
       if (!threadId) continue;
       const lo = Math.min(...times);
-      const hi = Math.max(...times);
       for (const m of this.store.messagesOf(threadId)) {
-        if (m.status === 'sent' && m.timestamp > lo && m.timestamp < hi && !listed.has(m.id)) out.push({ threadId, messageId: m.id, timestamp: m.timestamp });
+        if (m.status === 'sent' && m.timestamp > lo && !listed.has(m.id)) out.push({ threadId, messageId: m.id, timestamp: m.timestamp });
       }
     }
     return out;

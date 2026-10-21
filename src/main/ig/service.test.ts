@@ -585,9 +585,20 @@ describe('IgChatService live data', () => {
     expect(removed).toHaveBeenCalledWith(T1, 'mid.$m2');
   });
 
+  it('notices an unsend of the newest message (it drops off the top of the list)', async () => {
+    const removed = vi.fn();
+    svc.on('msg:removed', removed);
+    // m11 is the newest stored message (m12 is a tombstone in the fixture); the page's list now ends at m10.
+    const without = messageNodes.filter((n) => n.message_id !== 'mid.$m11' && n.message_id !== 'mid.$m12');
+    exec.handlers[OPS.messageList] = () => ({ fetch__SlideThread: { as_ig_direct_thread: { slide_messages: { edges: without.map((node) => ({ node })), page_info: {} } } } });
+    await svc.applyDelta({ threads: [{ ...threadNodes[0], slide_messages: { edges: without.map((node) => ({ node })) } }], messages: [], removed: ['client:some:relay:id'] });
+    expect(removed).toHaveBeenCalledWith(T1, 'mid.$m11');
+  });
+
   it('does not ask Instagram anything when a thread delta lists every message it already has', async () => {
     exec.calls.length = 0;
-    const listed = messageNodes.slice(0, 5);
+    // The page lists the newest messages (here the last six).
+    const listed = messageNodes.slice(-6);
     await svc.applyDelta({ threads: [{ ...threadNodes[0], slide_messages: { edges: listed.map((node) => ({ node })) } }], messages: [], removed: [] });
     expect(exec.calls).toEqual([]);
   });
