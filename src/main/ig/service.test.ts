@@ -49,9 +49,9 @@ class FakeEngine implements EngineLike {
     return this.canOpen;
   }
   opened: string[] = [];
-  async openUserThread(username: string): Promise<string | null> {
-    this.opened.push(username);
-    return this.userThreads[username] ?? null;
+  async openUserThread(userId: string): Promise<string | null> {
+    this.opened.push(userId);
+    return this.userThreads[userId] ?? null;
   }
   async attachImage(threadId: string, filePath: string): Promise<void> {
     this.onAttach(threadId, filePath);
@@ -143,6 +143,13 @@ describe('IgChatService status', () => {
 });
 
 describe('IgChatService reads', () => {
+  it('fills in a profile that has a name but no photo', async () => {
+    relay.snap = { ...snapshot(), viewer: { id: '9000000001', username: 'me', full_name: 'Me', fbid: '900000000000001' } };
+    const rich = { ...threadNodes[0], viewer: { id: '9000000001', interop_messaging_user_fbid: '900000000000001', username: 'me', full_name: 'Me', profile_pic_url: 'https://scontent.cdninstagram.com/v/me.jpg' } };
+    exec.handlers[OPS.threadList] = () => ({ fetch__SlideMailbox: { threads_by_folder: { edges: [{ node: { as_ig_direct_thread: rich } }], page_info: { end_cursor: null, has_next_page: false } } } });
+    expect((await svc.me()).avatarUrl).toBeTruthy();
+  });
+
   it("fills in the profile with one inbox read when the live page's viewer record is thin", async () => {
     relay.snap = { ...snapshot(), viewer: { id: '9000000001', fbid: '900000000000001' } };
     const rich = { ...threadNodes[0], viewer: { id: '9000000001', interop_messaging_user_fbid: '900000000000001', username: 'me_real', full_name: 'Me Real' } };
@@ -693,7 +700,7 @@ describe('IgChatService people search', () => {
   it('opens a DM it did not know through the page, creating a placeholder thread', async () => {
     exec.handlers[SEARCH_PATH] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend', is_verified: false }]);
     await svc.searchPeople('new');
-    engine.userThreads.new_friend = '1000000000000077';
+    engine.userThreads['9000000077'] = '1000000000000077';
     const t = await svc.openThreadWithUser('9000000077');
     expect(t).toMatchObject({ id: '1000000000000077', title: 'New Friend', isGroup: false });
     expect(t.participants.map((p) => p.username)).toEqual(['new_friend']);
@@ -728,7 +735,7 @@ describe('IgChatService people search', () => {
   it('keeps later real-thread ingestion working after a placeholder', async () => {
     exec.handlers[SEARCH_PATH] = () => searchResult([{ pk: '9000000077', username: 'new_friend', full_name: 'New Friend' }]);
     await svc.searchPeople('new');
-    engine.userThreads.new_friend = '1000000000000077';
+    engine.userThreads['9000000077'] = '1000000000000077';
     await svc.openThreadWithUser('9000000077');
     const seen: string[] = [];
     svc.on('inbox:updated', (ts) => seen.push(...ts.map((t) => t.id)));

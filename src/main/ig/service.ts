@@ -55,6 +55,20 @@ const IMAGE_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'j
 const POLL_MS = 100;
 const MAX_SEARCH_CHARS = 100;
 
+/** `IGCHAT_DEBUG=1` logs the shape of live updates (counts and field names only; never text or ids). */
+const DEBUG = process.env['IGCHAT_DEBUG'] === '1';
+
+function debugDelta(delta: RelayDelta, fromRemoved: number, fromLists: number): void {
+  const rec = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' ? (v as Record<string, unknown>) : {});
+  const messages = delta.messages.map(rec).map((m) => ({
+    type: rec(m.content).__typename ?? m.content_type ?? '?',
+    tombstone: m.tombstone_reason != null ? String(m.tombstone_reason) : null,
+    unsentFields: Object.keys(m).filter((k) => /unsent|tombstone|deleted|removed|is_hidden/i.test(k))
+  }));
+  const threads = delta.threads.map(rec).map((t) => ({ listed: Array.isArray(rec(t.slide_messages).edges) ? (rec(t.slide_messages).edges as unknown[]).length : null, keys: Object.keys(t).filter((k) => /message|last|snippet/i.test(k)) }));
+  console.info('[igchat:debug] delta', JSON.stringify({ threads, messages, removed: delta.removed.length, candidates: { fromRemoved, fromLists } }));
+}
+
 const messageIdOf = (node: unknown): string | undefined => {
   const r = node && typeof node === 'object' ? (node as Record<string, unknown>) : null;
   const v = r?.message_id ?? r?.id;
@@ -239,11 +253,12 @@ export class IgChatService implements ChatService {
   }
 
   async me(): Promise<User> {
-    if (this.store.viewer?.username) return this.store.viewer;
+    const complete = (): boolean => Boolean(this.store.viewer?.username && this.store.viewer.avatarUrl);
+    if (complete()) return this.store.viewer!;
     await this.ready();
-    await this.loadSnapshot();
+    if (!complete()) await this.loadSnapshot();
     // The live page's viewer record can lack the username, name and photo; the inbox query carries them.
-    if (!this.store.viewer?.username && this.store.viewerFbid) await this.fetchInboxPage(null, true, true).catch(() => {});
+    if (!complete() && this.store.viewerFbid) await this.fetchInboxPage(null, true, true).catch(() => {});
     if (this.store.viewer) return this.store.viewer;
     throw new ServiceError('EngineNotReady', 'Instagram is still loading');
   }
@@ -354,7 +369,7 @@ export class IgChatService implements ChatService {
     if (known) return known;
     await this.ready();
     if (!this.deps.engine.canOpenUserThread()) throw new ServiceError('RateLimited', 'Too many chats opened by name. Try again in a few minutes');
-    const threadId = await this.deps.engine.openUserThread(user.username);
+    const threadId = await this.deps.engine.openUserThread(user.id);
     if (!threadId) throw new ServiceError('Unknown', `Couldn't open a chat with @${user.username}`);
     // The relay may deliver the real record under the id the page used or one we can match by person.
     const arrived = (): Thread | undefined => this.store.thread(threadId) ?? this.store.dmThreadWith(user.id);
@@ -604,7 +619,10 @@ export class IgChatService implements ChatService {
   async applyDelta(delta: RelayDelta): Promise<void> {
     this.store.ingestThreads(delta.threads);
     this.store.ingestMessages(delta.messages);
-    const candidates = [...this.store.candidatesForRemoval(delta.removed), ...this.droppedFromThreadLists(delta.threads)];
+    const fromRemoved = this.store.candidatesForRemoval(delta.removed);
+    const fromLists = this.droppedFromThreadLists(delta.threads);
+    if (DEBUG) debugDelta(delta, fromRemoved.length, fromLists.length);
+    const candidates = [...fromRemoved, ...fromLists];
     if (candidates.length) await this.verifyRemovals(candidates);
   }
 
@@ -651,7 +669,11 @@ export class IgChatService implements ChatService {
         const present = new Set(page.nodes.map(messageIdOf).filter((id): id is string => !!id));
         const times = page.nodes.map((n) => Number((n as Record<string, unknown>).timestamp_ms)).filter(Number.isFinite);
         const oldestInPage = times.length ? Math.min(...times) : Number.POSITIVE_INFINITY;
-        for (const c of candidates) if (!present.has(c.messageId) && c.timestamp > oldestInPage) this.store.remove(threadId, c.messageId);
+        for (const c of candidates) {
+          const gone = !present.has(c.messageId) && c.timestamp > oldestInPage;
+          if (DEBUG) console.info('[igchat:debug] removal check', { inNewestPage: present.has(c.messageId), newerThanPage: c.timestamp > oldestInPage, removed: gone });
+          if (gone) this.store.remove(threadId, c.messageId);
+        }
       } catch {
         // Leave the message in place; a later refresh will settle it.
       }

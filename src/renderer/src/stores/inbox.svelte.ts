@@ -28,20 +28,21 @@ class InboxStore {
       if (page.status === 'rejected') throw page.reason;
       this.threads = sortThreads(page.value.items);
       this.hasMore = page.value.hasMore;
-      if (me.status === 'rejected') void this.retryMe();
+      if (me.status === 'rejected' || !this.me?.avatarUrl) void this.retryMe();
     } finally {
       this.loading = false;
     }
   }
 
-  /** A few spaced retries for the profile alone (the engine may still be finishing its first load). */
+  /** A few spaced retries for the profile alone (the engine may still be finishing its first load, or lack the photo). */
   private async retryMe(): Promise<void> {
     for (const ms of [2000, 5000, 15000]) {
       await new Promise((resolve) => setTimeout(resolve, ms));
-      if (this.me) return;
+      if (this.me?.avatarUrl) return;
       try {
-        this.me = await call('session:me');
-        return;
+        const me = await call('session:me');
+        if (me.avatarUrl || !this.me) this.me = me;
+        if (me.avatarUrl) return;
       } catch {
         // try again
       }

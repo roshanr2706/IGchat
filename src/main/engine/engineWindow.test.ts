@@ -226,44 +226,54 @@ describe('EngineWindow thread navigation', () => {
   });
 });
 
-describe('EngineWindow opening a DM by username', () => {
-  const DM = 'https://www.instagram.com/direct/t/333/';
+describe('EngineWindow opening a DM with a person', () => {
+  const DM = 'https://www.instagram.com/direct/t/1000000000000333/';
+  const BY_USER = 'https://www.instagram.com/direct/t/9000000002/';
 
-  it('follows ig.me, lands on the thread, and does not reload the inbox on the hop', async () => {
+  it('opens /direct/t/<user id>/, follows the redirect to the existing thread, and does not reload the inbox', async () => {
     const e = await readyEngine();
     const wc = win().webContents;
     wc.loads.length = 0;
-    wc.nextUrl = (u) => (u.startsWith('https://ig.me/') ? 'https://ig.me/m/alex.r' : u);
+    wc.nextUrl = (u) => (u === BY_USER ? BY_USER : u);
     wc.onLoaded = (u, w) => {
-      if (u.startsWith('https://ig.me/')) {
+      if (u === BY_USER) {
         w.url = DM;
         w.emit('did-navigate', {}, DM);
       }
     };
-    await expect(e.openUserThread('alex.r')).resolves.toBe('333');
+    await expect(e.openUserThread('9000000002')).resolves.toBe('1000000000000333');
     await flush();
-    expect(wc.loads).toEqual(['https://ig.me/m/alex.r']);
+    expect(wc.loads).toEqual([BY_USER]);
     expect(e.state).toBe('ready');
   });
 
-  it('rejects usernames that are not plain handles, without loading anything', async () => {
+  it('treats a page that stays on /direct/t/<user id>/ as a brand-new conversation', async () => {
     const e = await readyEngine();
     const wc = win().webContents;
     wc.loads.length = 0;
-    for (const bad of ['', 'a/b', 'a b', '../x', 'x?y=1', 'a'.repeat(31), 'a%2Fb']) await expect(e.openUserThread(bad)).resolves.toBeNull();
+    wc.nextUrl = (u) => (u === BY_USER ? BY_USER : u);
+    await expect(e.openUserThread('9000000002')).resolves.toBe('9000000002');
+    expect(wc.loads).toEqual([BY_USER]);
+  });
+
+  it('rejects anything that is not a numeric user id, without loading anything', async () => {
+    const e = await readyEngine();
+    const wc = win().webContents;
+    wc.loads.length = 0;
+    for (const bad of ['', 'alex', '12', '1/2', '../123', '123?x=1', '1'.repeat(26), '123%2F4']) await expect(e.openUserThread(bad)).resolves.toBeNull();
     expect(wc.loads).toEqual([]);
   });
 
   it('returns null when the engine is not ready or never reaches a thread', async () => {
     const idle = new EngineWindow({ sleep: instant });
-    await expect(idle.openUserThread('alex')).resolves.toBeNull();
+    await expect(idle.openUserThread('9000000002')).resolves.toBeNull();
     const e = await readyEngine();
     const wc = win().webContents;
     wc.loads.length = 0;
     wc.nextUrl = (u) => (u === INBOX ? INBOX : 'https://www.instagram.com/');
-    await expect(e.openUserThread('alex')).resolves.toBeNull();
+    await expect(e.openUserThread('9000000002')).resolves.toBeNull();
     // Exactly one explicit recovery load; the window stays hidden and the engine stays ready.
-    expect(wc.loads).toEqual(['https://ig.me/m/alex', INBOX]);
+    expect(wc.loads).toEqual([BY_USER, INBOX]);
     expect(win().shown).toBe(0);
     expect(e.state).toBe('ready');
     await flush();
@@ -274,22 +284,22 @@ describe('EngineWindow opening a DM by username', () => {
     const e = await readyEngine();
     const wc = win().webContents;
     wc.nextUrl = (u) => (u === INBOX ? INBOX : 'https://www.instagram.com/');
-    for (let i = 0; i < 5; i++) await expect(e.openUserThread('alex')).resolves.toBeNull();
+    for (let i = 0; i < 5; i++) await expect(e.openUserThread('9000000002')).resolves.toBeNull();
     expect(e.canOpenUserThread()).toBe(false);
     wc.loads.length = 0;
-    await expect(e.openUserThread('alex')).resolves.toBeNull();
+    await expect(e.openUserThread('9000000002')).resolves.toBeNull();
     expect(wc.loads).toEqual([]);
     expect(win().shown).toBe(0);
     expect(e.state).toBe('ready');
   });
 
-  it('recovers by loading the inbox when the hop lands on ig.me itself', async () => {
+  it('recovers by loading the inbox when the page ends up somewhere that is not a conversation', async () => {
     const e = await readyEngine();
     const wc = win().webContents;
     wc.loads.length = 0;
-    wc.nextUrl = (u) => (u === INBOX ? 'https://www.instagram.com/direct/inbox/' : u);
-    await expect(e.openUserThread('alex')).resolves.toBeNull();
-    expect(wc.loads).toEqual(['https://ig.me/m/alex', INBOX]);
+    wc.nextUrl = (u) => (u === INBOX ? INBOX : 'https://www.instagram.com/m/someone/');
+    await expect(e.openUserThread('9000000002')).resolves.toBeNull();
+    expect(wc.loads).toEqual([BY_USER, INBOX]);
     expect(win().shown).toBe(0);
     expect(e.state).toBe('ready');
   });
@@ -299,10 +309,10 @@ describe('EngineWindow opening a DM by username', () => {
     const wc = win().webContents;
     wc.loads.length = 0;
     wc.nextUrl = () => 'https://www.instagram.com/accounts/login/';
-    await expect(e.openUserThread('alex')).rejects.toMatchObject({ code: 'AuthExpired' });
+    await expect(e.openUserThread('9000000002')).rejects.toMatchObject({ code: 'AuthExpired' });
     expect(e.state).toBe('needsUser');
     expect(win().visible).toBe(true);
-    expect(wc.loads).toEqual(['https://ig.me/m/alex']);
+    expect(wc.loads).toEqual([BY_USER]);
   });
 
   it('does not mistake the thread it was already on for the result', async () => {
@@ -313,7 +323,7 @@ describe('EngineWindow opening a DM by username', () => {
     wc.loadURL = async () => {
       throw new Error('ERR_ABORTED');
     };
-    await expect(e.openUserThread('alex')).resolves.toBeNull();
+    await expect(e.openUserThread('9000000002')).resolves.toBeNull();
   });
 });
 

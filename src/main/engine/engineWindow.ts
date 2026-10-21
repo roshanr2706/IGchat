@@ -14,7 +14,9 @@ const RESPONSIVE_GRACE_MS = 10_000;
 const READY_SETTLE_MS = 3000;
 const USER_THREAD_TIMEOUT_MS = 12_000;
 /** Instagram handles: letters, digits, dots and underscores, at most 30. Anything else never reaches a URL. */
-const USERNAME_RE = /^[A-Za-z0-9._]{1,30}$/;
+const USER_ID_RE = /^[0-9]{3,25}$/;
+/** How long /direct/t/<user id>/ gets to redirect to an existing thread before it counts as a new conversation. */
+const NEW_CONVERSATION_GRACE_MS = 6000;
 
 export function cdpFromDebugger(dbg: Debugger): CdpLike {
   return {
@@ -51,7 +53,7 @@ export class EngineWindow implements EngineLike {
   private unresponsive: ReturnType<typeof setTimeout> | null = null;
   private starting: Promise<void> | null = null;
   private redirecting = false;
-  /** True while openUserThread follows an ig.me link: the hops through ig.me are not bounces and must not reload the inbox. */
+  /** True while openUserThread is opening a person's chat: its intermediate pages are not bounces and must not reload the inbox. */
   private followingLink = false;
   /** Hard ceiling on automatic inbox reloads that no navigation can reset: only an explicit start() or logout() does. */
   private readonly bounceCap = new RedirectPolicy(6, 10 * 60_000);
@@ -199,25 +201,27 @@ export class EngineWindow implements EngineLike {
   }
 
   /**
-   * Follows Instagram's own ig.me link for a username (as a browser click would) and returns the DM thread id it lands
-   * on. Returns null for an invalid username, a page that is not ready, or when the thread isn't reached in time.
+   * Opens the DM with a person the way Instagram's web app addresses it, /direct/t/<their user id>/, which Instagram
+   * redirects to the existing conversation (seen live 2026-10-21; ig.me only reaches a mobile handoff page on the web).
+   * Resolves to the thread id it lands on, the user id itself for a brand-new conversation, or null for an invalid id,
+   * a page that is not ready, or when no conversation page is reached in time.
    */
   canOpenUserThread(): boolean {
     return !this.personOpenBudget.exhausted();
   }
 
-  async openUserThread(username: string): Promise<string | null> {
+  async openUserThread(userId: string): Promise<string | null> {
     const win = this.win;
-    if (!win || this.state !== 'ready' || !USERNAME_RE.test(username) || this.followingLink || !this.canOpenUserThread()) return null;
+    if (!win || this.state !== 'ready' || !USER_ID_RE.test(userId) || this.followingLink || !this.canOpenUserThread()) return null;
     this.followingLink = true;
     const before = this.page.url();
     let ok = false;
     try {
       let loaded = true;
-      // ig.me redirects to instagram.com (an allowed host), so the redirect guard lets it through. Bounded in case the load hangs.
+      // Bounded in case the load hangs.
       let cap: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
-        win.webContents.loadURL(`https://ig.me/m/${username}`).catch(() => {
+        win.webContents.loadURL(`https://www.instagram.com/direct/t/${userId}/`).catch(() => {
           loaded = false;
         }),
         new Promise<void>((resolve) => {
@@ -232,7 +236,13 @@ export class EngineWindow implements EngineLike {
         const url = this.page.url();
         const id = threadIdFromUrl(url);
         // A failed load that left us on the thread we were already viewing is not an answer.
-        if (id && (loaded || url !== before)) {
+        const fresh = loaded || url !== before;
+        if (id && id !== userId && fresh) {
+          ok = true;
+          return id;
+        }
+        // Still on /direct/t/<user id>/ after the grace period: no conversation yet, Instagram shows a new one.
+        if (id === userId && fresh && waited >= NEW_CONVERSATION_GRACE_MS) {
           ok = true;
           return id;
         }
@@ -339,7 +349,7 @@ export class EngineWindow implements EngineLike {
       this.setState('needsUser');
       this.showForUser();
     } else if (this.followingLink) {
-      // openUserThread is mid-hop (ig.me -> instagram.com -> the thread); it re-checks the page when it finishes.
+      // openUserThread is opening a person's chat (possibly via intermediate pages); it re-checks the page when it finishes.
     } else if (this.handedOver) {
       // The user is mid-flow (password reset, "log in with Facebook"): leave navigation alone, except for the landing page.
       if (kind === 'goInbox' && this.isPostLoginLanding(url)) {
