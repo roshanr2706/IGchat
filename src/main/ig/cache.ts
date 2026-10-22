@@ -59,7 +59,12 @@ export class AccountCache implements CacheLike {
       writeFileSync(tmp, JSON.stringify(pending));
       renameSync(tmp, this.file);
     } catch {
-      rmSync(tmp, { force: true });
+      // force only ignores ENOENT; on Linux a blocked path gives ENOTDIR, which must not escape either
+      try {
+        rmSync(tmp, { force: true });
+      } catch {
+        /* nothing to clean up */
+      }
     }
   }
 
