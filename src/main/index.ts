@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, session, shell, type Tray } from 'electron';
+import { autoUpdater } from 'electron-updater';
 import { join } from 'node:path';
 import { SETTINGS_SYNC_CHANNEL } from '../shared/ipc';
 import type { ChatService } from './chatService';
@@ -12,6 +13,7 @@ import { MockChatService } from './mock/mockService';
 import { SettingsStore } from './settingsStore';
 import { startupPayload } from './startupPayload';
 import { createTray } from './tray';
+import { Updater } from './updater';
 
 function start(): void {
   const settings = new SettingsStore(join(app.getPath('userData'), 'settings.json'));
@@ -34,6 +36,19 @@ function start(): void {
   let quitting = false;
   const themesDir = join(app.getPath('userData'), 'themes');
   const soundFile = join(app.getPath('userData'), 'sounds', 'custom');
+  // Only installed builds can update themselves; a dev run reports 'unsupported'.
+  const updater = new Updater({
+    updater: app.isPackaged ? autoUpdater : null,
+    current: app.getVersion(),
+    enabled: () => settings.get().autoUpdate,
+    onStatus: (status) => {
+      const wc = mainWindow?.webContents;
+      if (wc && !wc.isDestroyed()) wc.send('update:status', status);
+    },
+    beforeInstall: () => {
+      quitting = true;
+    }
+  });
 
   function showWindow(): void {
     if (!mainWindow) mainWindow = createWindow();
@@ -86,7 +101,7 @@ function start(): void {
   });
   registerIpc(
     ipcMain,
-    createHandlers({ service, settings, getWindow: () => mainWindow, themesDir, soundFile })
+    createHandlers({ service, settings, getWindow: () => mainWindow, themesDir, soundFile, updater })
   );
   forwardEvents(service, () => mainWindow?.webContents ?? null);
 
@@ -109,6 +124,7 @@ function start(): void {
       }
     });
     service.start();
+    updater.start();
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow();
     });
@@ -117,6 +133,7 @@ function start(): void {
   // stop() also flushes the debounced inbox cache write.
   app.on('before-quit', () => {
     quitting = true;
+    updater.stop();
     service.stop();
   });
   app.on('window-all-closed', () => {

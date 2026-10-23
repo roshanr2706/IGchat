@@ -44,10 +44,13 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: installers-${{ matrix.os }}
+          # latest*.yml and the blockmaps are what the in-app updater reads to find and download new versions.
           path: |
             dist/*.exe
             dist/*.deb
             dist/*.AppImage
+            dist/*.blockmap
+            dist/latest*.yml
           if-no-files-found: error
 
   release:

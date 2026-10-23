@@ -106,5 +106,6 @@ describe('SettingsModal quick reactions', () => {
     await user.click(screen.getByRole('button', { name: 'Reset quick reactions' }));
     expect(settings.value.quickReactions).toEqual(DEFAULT_SETTINGS.quickReactions);
     await vi.waitFor(() => expect(saved.quickReactions).toEqual(DEFAULT_SETTINGS.quickReactions));
-  });
+    // Typing through the emoji picker is slow under a full parallel run; 5 s timed out intermittently.
+  }, 20_000);
 });

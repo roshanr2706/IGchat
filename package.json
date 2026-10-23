@@ -33,6 +33,14 @@
       ],
       "category": "Network",
       "maintainer": "Roshan R"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "roshanr2706",
+      "repo": "IGchat"
+    },
+    "nsis": {
+      "artifactName": "${productName}-Setup-${version}.${ext}"
     }
   },
   "devDependencies": {
@@ -51,6 +59,7 @@
     "vitest": "^5.0.3"
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
     "emojibase-data": "17.0.0"
   }
 }

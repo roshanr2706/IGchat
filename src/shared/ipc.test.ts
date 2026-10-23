@@ -10,7 +10,7 @@ describe('ipc contract', () => {
 
   it('lists every event channel exactly once', () => {
     expect(new Set(EVENT_CHANNELS).size).toBe(EVENT_CHANNELS.length);
-    expect(EVENT_CHANNELS).toEqual(['inbox:updated', 'msg:new', 'msg:updated', 'msg:removed', 'sync:status']);
+    expect(EVENT_CHANNELS).toEqual(['inbox:updated', 'msg:new', 'msg:updated', 'msg:removed', 'sync:status', 'update:status']);
   });
 
   it('keeps the sync settings channel out of the invoke list', () => {

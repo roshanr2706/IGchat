@@ -25,6 +25,8 @@ export type Settings = {
   soundVolume: number;
   /** File name of the user's custom sound, for display; null when none is set. */
   customSoundName: string | null;
+  /** Check GitHub Releases for new versions and download them in the background. */
+  autoUpdate: boolean;
 };
 
 export const MAX_QUICK_REACTIONS = 8;
@@ -65,7 +67,8 @@ export const DEFAULT_SETTINGS: Settings = {
   closeToTray: true,
   notificationSound: 'chime',
   soundVolume: 0.6,
-  customSoundName: null
+  customSoundName: null,
+  autoUpdate: true
 };
 
 const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n));
@@ -95,6 +98,7 @@ export function sanitizeSettings(input: unknown): Settings {
     closeToTray: bool(o.closeToTray, d.closeToTray),
     notificationSound: SOUND_IDS.includes(o.notificationSound as SoundId) ? (o.notificationSound as SoundId) : d.notificationSound,
     soundVolume: clamp(num(o.soundVolume, d.soundVolume), 0, 1),
-    customSoundName: typeof o.customSoundName === 'string' && o.customSoundName.length > 0 ? o.customSoundName.slice(0, 200) : null
+    customSoundName: typeof o.customSoundName === 'string' && o.customSoundName.length > 0 ? o.customSoundName.slice(0, 200) : null,
+    autoUpdate: bool(o.autoUpdate, d.autoUpdate)
   };
 }

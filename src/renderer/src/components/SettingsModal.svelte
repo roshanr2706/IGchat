@@ -6,6 +6,7 @@
   import { settings } from '../stores/settings.svelte';
   import { themes } from '../stores/themes.svelte';
   import { ui } from '../stores/ui.svelte';
+  import { update } from '../stores/update.svelte';
   import { SYSTEM_THEME_ID } from '../themes/apply';
   import { BUILTIN_THEMES } from '../themes/builtin';
   import EmojiPicker from './EmojiPicker.svelte';
@@ -97,6 +98,27 @@
       ...(settings.value.notificationSound === 'custom' ? { notificationSound: DEFAULT_SETTINGS.notificationSound } : {})
     });
   }
+
+  const updateText = $derived.by(() => {
+    const s = update.status;
+    if (!s) return '';
+    switch (s.state) {
+      case 'unsupported':
+        return "This build can't update itself (development build).";
+      case 'checking':
+        return 'Checking for updates…';
+      case 'none':
+        return "You're up to date.";
+      case 'downloading':
+        return `Downloading ${s.version ?? 'an update'}…`;
+      case 'ready':
+        return `${s.version} is ready. Restart to install it.`;
+      case 'error':
+        return `Couldn't check for updates: ${s.error ?? 'unknown error'}`;
+      default:
+        return '';
+    }
+  });
 
   async function logOut(): Promise<void> {
     if (!window.confirm('Log out of Instagram in IGchat?')) return;
@@ -238,6 +260,22 @@
         Close to tray
       </label>
       <p class="hint">Closing the window keeps IGchat running in the system tray. Quit from the tray icon's menu.</p>
+    </section>
+
+    <section>
+      <h3>Updates</h3>
+      <label class="row">
+        <input type="checkbox" checked={settings.value.autoUpdate} onchange={(e) => void settings.update({ autoUpdate: e.currentTarget.checked })} />
+        Automatically download updates
+      </label>
+      <div class="row">
+        {#if update.status?.state === 'ready'}
+          <button class="secondary" onclick={() => update.install()}>Restart to update</button>
+        {:else}
+          <button class="secondary" disabled={update.checking || update.status?.state === 'unsupported' || update.status?.state === 'downloading'} onclick={() => void update.check()}>Check now</button>
+        {/if}
+        <span class="hint inline">{update.status ? `Version ${update.status.current}. ` : ''}{updateText}</span>
+      </div>
     </section>
 
     <section>

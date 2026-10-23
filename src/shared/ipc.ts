@@ -8,6 +8,16 @@ export type Result<T> = { ok: true; value: T } | { ok: false; code: ErrorCode; m
 /** `lastSeenMessageId`: the newest message the viewer had seen when the page was fetched (drives the "NEW" divider on first open). */
 export type ThreadPage = { messages: Message[]; hasOlder: boolean; lastSeenMessageId?: string | null };
 export type CustomThemes = { themes: ThemeDef[]; errors: string[] };
+/**
+ * `unsupported`: a dev build or a format that can't update itself. `ready`: `version` is downloaded and installs on
+ * restart. `error` carries a short message.
+ */
+export type UpdateStatus = {
+  state: 'unsupported' | 'idle' | 'checking' | 'none' | 'downloading' | 'ready' | 'error';
+  current: string;
+  version?: string;
+  error?: string;
+};
 
 /** Renderer → main request/response channels. */
 export interface InvokeMap {
@@ -38,6 +48,11 @@ export interface InvokeMap {
   /** Stores the user's custom notification sound (null removes it). */
   'sound:setCustom': (bytes: Uint8Array | null) => void;
   'sound:getCustom': () => Uint8Array | null;
+  'update:status': () => UpdateStatus;
+  /** Checks now (and downloads what it finds), whatever the auto-update setting. */
+  'update:check': () => UpdateStatus;
+  /** Quits and installs a downloaded update. */
+  'update:install': () => void;
 }
 export type InvokeChannel = keyof InvokeMap;
 export type InvokeArgs<C extends InvokeChannel> = Parameters<InvokeMap[C]>;
@@ -51,6 +66,7 @@ export interface EventMap {
   'msg:updated': (threadId: string, message: Message) => void;
   'msg:removed': (threadId: string, messageId: string) => void;
   'sync:status': (status: SyncStatus) => void;
+  'update:status': (status: UpdateStatus) => void;
 }
 export type EventChannel = keyof EventMap;
 
@@ -80,10 +96,13 @@ export const INVOKE_CHANNELS = [
   'themes:openFolder',
   'shell:openExternal',
   'sound:setCustom',
-  'sound:getCustom'
+  'sound:getCustom',
+  'update:status',
+  'update:check',
+  'update:install'
 ] as const satisfies readonly InvokeChannel[];
 
-export const EVENT_CHANNELS = ['inbox:updated', 'msg:new', 'msg:updated', 'msg:removed', 'sync:status'] as const satisfies readonly EventChannel[];
+export const EVENT_CHANNELS = ['inbox:updated', 'msg:new', 'msg:updated', 'msg:removed', 'sync:status', 'update:status'] as const satisfies readonly EventChannel[];
 
 // Compile-time exhaustiveness: adding a channel to a map without listing it above is a type error.
 type MissingInvoke = Exclude<InvokeChannel, (typeof INVOKE_CHANNELS)[number]>;

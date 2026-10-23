@@ -11,6 +11,7 @@
   import ContextMenu from './components/ContextMenu.svelte';
   import Lightbox from './components/Lightbox.svelte';
   import Toasts from './components/Toasts.svelte';
+  import UpdateBanner from './components/UpdateBanner.svelte';
   import { stepThread } from './lib/actions';
   import { call } from './lib/api';
   import { matchShortcut } from './lib/shortcuts';
@@ -19,10 +20,12 @@
   import { settings } from './stores/settings.svelte';
   import { themes } from './stores/themes.svelte';
   import { ui } from './stores/ui.svelte';
+  import { update } from './stores/update.svelte';
   import { applyTheme } from './themes/apply';
 
   onMount(() => {
-    const offs = [inbox.subscribe(), messages.subscribe()];
+    const offs = [inbox.subscribe(), messages.subscribe(), update.subscribe()];
+    void update.load();
     void inbox.load().catch(() => ui.toast("Couldn't load your inbox"));
     void themes.loadCustom();
 
@@ -90,6 +93,7 @@
 
 <div class="app" class:compact={settings.value.compact}>
   <TitleBar />
+  <UpdateBanner />
   <div class="body">
     <Sidebar />
     <main class="main">

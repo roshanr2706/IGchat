@@ -48,6 +48,6 @@ describe('forwardEvents', () => {
     destroyed = false;
     emitter.emit('sync:status', 'ok');
     expect(send).toHaveBeenCalledTimes(1);
-    expect(EVENT_CHANNELS.length).toBe(5);
+    expect(EVENT_CHANNELS.length).toBe(6);
   });
 });

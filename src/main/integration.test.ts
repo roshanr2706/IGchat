@@ -14,6 +14,7 @@ import { messages } from '../renderer/src/stores/messages.svelte';
 import { settings } from '../renderer/src/stores/settings.svelte';
 import { ui } from '../renderer/src/stores/ui.svelte';
 import { createHandlers } from './handlers';
+import { Updater } from './updater';
 import { forwardEvents, registerIpc, type IpcLike } from './ipc';
 import { MockChatService } from './mock/mockService';
 import { SettingsStore } from './settingsStore';
@@ -35,7 +36,7 @@ function createAdapter(): Bridge {
   const store = new SettingsStore(join(dir, 'settings.json'));
   const handlersByChannel = new Map<string, (...args: unknown[]) => unknown>();
   const ipc: IpcLike = { handle: (channel, listener) => handlersByChannel.set(channel, (...args) => listener({} as never, ...args)) };
-  registerIpc(ipc, createHandlers({ service, settings: store, getWindow: () => null, themesDir: join(dir, 'themes'), soundFile: join(dir, 'sounds', 'custom') }));
+  registerIpc(ipc, createHandlers({ service, settings: store, getWindow: () => null, themesDir: join(dir, 'themes'), soundFile: join(dir, 'sounds', 'custom'), updater: new Updater({ updater: null, current: '0.0.0', enabled: () => false, onStatus: () => {}, beforeInstall: () => {} }) }));
 
   const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
   const sender = {

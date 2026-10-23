@@ -5,6 +5,7 @@ import type { InvokeArgs, InvokeChannel, InvokeReturn } from '../shared/ipc';
 import type { ChatService } from './chatService';
 import { loadCustomThemes } from './customThemes';
 import type { SettingsStore } from './settingsStore';
+import type { Updater } from './updater';
 
 export const TITLEBAR_HEIGHT = 32;
 /** Custom notification sounds are short clips; anything bigger is refused. */
@@ -21,9 +22,10 @@ export type HandlerDeps = {
   themesDir: string;
   /** Where the user's custom notification sound is kept. */
   soundFile: string;
+  updater: Updater;
 };
 
-export function createHandlers({ service, settings, getWindow, themesDir, soundFile }: HandlerDeps): Handlers {
+export function createHandlers({ service, settings, getWindow, themesDir, soundFile, updater }: HandlerDeps): Handlers {
   return {
     'session:me': () => service.me(),
     'inbox:get': () => service.getInbox(),
@@ -80,6 +82,9 @@ export function createHandlers({ service, settings, getWindow, themesDir, soundF
       } catch {
         return null;
       }
-    }
+    },
+    'update:status': () => updater.get(),
+    'update:check': () => updater.check(),
+    'update:install': () => updater.install()
   };
 }
