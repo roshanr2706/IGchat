@@ -37,12 +37,14 @@
     onResize();
     const onFocus = (): void => void call('session:setFocused', true).catch(() => {});
     const onBlur = (): void => void call('session:setFocused', false).catch(() => {});
+    const clock = setInterval(() => (ui.now = Date.now()), 30_000);
     scheme.addEventListener('change', onScheme);
     window.addEventListener('resize', onResize);
     window.addEventListener('focus', onFocus);
     window.addEventListener('blur', onBlur);
     return () => {
       offs.forEach((off) => off());
+      clearInterval(clock);
       scheme.removeEventListener('change', onScheme);
       window.removeEventListener('resize', onResize);
       window.removeEventListener('focus', onFocus);

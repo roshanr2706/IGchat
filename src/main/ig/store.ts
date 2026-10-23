@@ -1,5 +1,5 @@
 import type { EventMap } from '../../shared/ipc';
-import type { Message, Thread, User } from '../../shared/types';
+import type { Message, ReadReceipt, Thread, User } from '../../shared/types';
 import { Emitter } from '../emitter';
 import { normalizeMessage, normalizeReactions, normalizeThread, normalizeUser, type MessageContext } from './normalize';
 
@@ -116,6 +116,8 @@ export class IgStore {
       for (const u of n.users) if (u.fbid) this.igidByFbid.set(u.fbid, u.user.id);
       this.threadIdByFbid.set(n.fbid, n.thread.id);
       const prev = this.threadsById.get(n.thread.id);
+      const readReceipts = this.mergeReceipts(n.receipts, prev?.thread.readReceipts);
+      if (readReceipts.length) n.thread.readReceipts = readReceipts;
       this.threadsById.set(n.thread.id, {
         thread: n.thread,
         fbid: n.fbid,
@@ -129,6 +131,22 @@ export class IgStore {
     if (this.igidByFbid.size !== knownBefore || (!hadViewer && this.viewer && this.viewerFbid)) this.reattribute();
     this.replayOrphans();
     return all;
+  }
+
+  /**
+   * Instagram only reports how far someone has read, not when. A watermark seen moving while IGchat runs is stamped
+   * with the moment it moved; one already there on first sight falls back to the watermark itself. A source with an
+   * older watermark (a stale page) never rolls a receipt back.
+   */
+  private mergeReceipts(raws: { fbid: string; watermark: number }[], prev: ReadReceipt[] | undefined): ReadReceipt[] {
+    const byUser = new Map((prev ?? []).map((r) => [r.userId, r]));
+    for (const raw of raws) {
+      const userId = this.igidOf(raw.fbid) ?? raw.fbid;
+      const p = byUser.get(userId);
+      if (!p) byUser.set(userId, { userId, watermark: raw.watermark, at: raw.watermark });
+      else if (raw.watermark > p.watermark) byUser.set(userId, { userId, watermark: raw.watermark, at: Math.max(raw.watermark, Date.now()) });
+    }
+    return [...byUser.values()];
   }
 
   ingestMessages(raws: unknown[], opts: IngestOptions = {}): Message[] {

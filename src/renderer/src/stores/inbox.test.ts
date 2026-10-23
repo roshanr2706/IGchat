@@ -1,9 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeThread, makeUser } from '../../../shared/test/factories';
 import type { Thread } from '../../../shared/types';
 import { setBridge } from '../lib/api';
 import { createFakeBridge, type FakeBridge } from '../lib/fakeBridge';
+import { playSound } from '../lib/sound';
 import { inbox } from './inbox.svelte';
+
+vi.mock('../lib/sound', () => ({ playSound: vi.fn(() => Promise.resolve()) }));
 
 let bridge: FakeBridge;
 const a = makeThread({ id: 'a', lastActivityAt: 30 });
@@ -139,5 +142,39 @@ describe('inbox profile', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(bridge.calls.filter((c) => c.channel === 'session:me').length).toBe(asked);
     off();
+  });
+
+  describe('notification sound', () => {
+    const play = vi.mocked(playSound);
+    let off: () => void;
+    // The store throttles sounds across calls, so each test starts well after the last one played.
+    let clock = 10_000_000;
+    beforeEach(async () => {
+      clock += 60_000;
+      await inbox.load();
+      off = inbox.subscribe();
+      play.mockClear();
+      vi.useFakeTimers({ now: clock });
+    });
+    afterEach(() => {
+      off();
+      vi.useRealTimers();
+    });
+
+    it('plays for a live update that brings a new incoming message', () => {
+      bridge.emit('inbox:updated', [{ ...c, lastActivityAt: 40, unread: true }]);
+      expect(play).toHaveBeenCalledTimes(1);
+      expect(play).toHaveBeenCalledWith('chime', 0.6);
+    });
+
+    it('stays quiet for own sends, muted chats, fetched pages and bursts', () => {
+      bridge.emit('inbox:updated', [{ ...c, lastActivityAt: 40, unread: false }]);
+      bridge.emit('inbox:updated', [{ ...c, lastActivityAt: 41, unread: true, muted: true }]);
+      inbox.applyUpdates([{ ...a, lastActivityAt: 42, unread: true }]);
+      expect(play).not.toHaveBeenCalled();
+      bridge.emit('inbox:updated', [{ ...b, lastActivityAt: 50, unread: true }]);
+      bridge.emit('inbox:updated', [{ ...b, lastActivityAt: 51, unread: true }]);
+      expect(play).toHaveBeenCalledTimes(1);
+    });
   });
 });

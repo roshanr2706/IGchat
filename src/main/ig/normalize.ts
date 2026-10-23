@@ -22,6 +22,8 @@ export type NormalizedThread = {
   viewerFbid: string | null;
   /** Timestamp (ms) up to which the viewer has read this thread; 0 when unknown. */
   viewerWatermark: number;
+  /** Everyone else's read watermarks, by fbid (the store maps them to Instagram ids). */
+  receipts: { fbid: string; watermark: number }[];
 };
 export type MessageContext = {
   threadId: string;
@@ -69,11 +71,11 @@ export function normalizeThread(raw: unknown, viewerIgid: string | null): Normal
   const last = messageNodes(r).reduce<Raw | undefined>((a, n) => (!a || num(n.timestamp_ms) > num(a.timestamp_ms) ? n : a), undefined);
   const lastFromViewer = Boolean(last && viewerFbid && str(last.sender_fbid) === viewerFbid);
   const snippet = last ? (str(last.igd_snippet) ?? str(last.text_body) ?? str(obj(last.content)?.text_body) ?? '') : '';
-  const receipt = viewerFbid
-    ? arr(r.slide_read_receipts)
-        .map(obj)
-        .find((x) => str(x?.participant_fbid) === viewerFbid)
-    : undefined;
+  const allReceipts = arr(r.slide_read_receipts).map(obj).filter(isPresent);
+  const receipt = viewerFbid ? allReceipts.find((x) => str(x.participant_fbid) === viewerFbid) : undefined;
+  const receipts = allReceipts
+    .map((x) => ({ fbid: str(x.participant_fbid) ?? '', watermark: num(x.watermark_timestamp_ms) }))
+    .filter((x) => x.fbid && x.fbid !== viewerFbid && x.watermark > 0);
   const viewerWatermark = num(receipt?.watermark_timestamp_ms);
   const unreadByReceipt = Boolean(receipt && last && !lastFromViewer && num(last.timestamp_ms) > viewerWatermark);
 
@@ -95,7 +97,8 @@ export function normalizeThread(raw: unknown, viewerIgid: string | null): Normal
     threadKey: str(r.thread_id) ?? '',
     users,
     viewerFbid,
-    viewerWatermark
+    viewerWatermark,
+    receipts
   };
 }
 

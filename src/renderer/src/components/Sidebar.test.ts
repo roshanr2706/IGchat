@@ -30,10 +30,10 @@ beforeEach(() => {
 });
 
 describe('Sidebar', () => {
-  it('lists conversations with previews and unread state', () => {
+  it('lists conversations and unread state, without message previews', () => {
     const { container } = render(Sidebar);
     expect(screen.getByText('Alex Rivera')).toBeTruthy();
-    expect(screen.getByText('You: lol')).toBeTruthy();
+    expect(screen.queryByText('You: lol')).toBeNull();
     expect(container.querySelectorAll('.row.unread')).toHaveLength(1);
     expect(screen.getByText('me_user')).toBeTruthy();
   });

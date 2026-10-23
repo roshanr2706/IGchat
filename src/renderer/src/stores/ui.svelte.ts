@@ -9,6 +9,8 @@ type MessageRef = { threadId: string; messageId: string };
 
 class UiStore {
   windowWidth = $state(1280);
+  /** A coarse clock (ticked by App) so relative times like "5m" keep moving without each row running a timer. */
+  now = $state(Date.now());
   switcherOpen = $state(false);
   settingsOpen = $state(false);
   replyTo = $state<Message | null>(null);

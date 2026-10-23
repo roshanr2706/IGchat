@@ -10,8 +10,8 @@
   import MessageContent from './MessageContent.svelte';
   import Reactions from './Reactions.svelte';
 
-  type Props = { message: Message; showHeader: boolean; thread: Thread; users: Map<string, User>; myId: string };
-  let { message, showHeader, thread, users, myId }: Props = $props();
+  type Props = { message: Message; showHeader: boolean; thread: Thread; users: Map<string, User>; myId: string; readLabel?: string | null };
+  let { message, showHeader, thread, users, myId, readLabel = null }: Props = $props();
 
   // The toolbar only mounts while hovered (or while its emoji picker is open) to keep long lists cheap.
   let hovered = $state(false);
@@ -112,6 +112,7 @@
     {/if}
     {#if interactive && !editing && (hovered || pinned)}
       <div class="actions-anchor">
+        {#if readLabel}<span class="read">{readLabel}</span>{/if}
         <MessageActions {message} threadId={thread.id} {myId} variant="toolbar" onpin={(open) => (pinned = open)} />
       </div>
     {/if}
@@ -197,6 +198,15 @@
   .message:hover .hover-time {
     visibility: visible;
   }
+  /* Rides with the hover toolbar, just left of it, so the two never overlap on short messages. */
+  .read {
+    padding: 2px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    background: var(--bg-base);
+  }
   .body {
     line-height: 1.4;
     color: var(--text-normal);
@@ -257,6 +267,9 @@
     top: -16px;
     right: 16px;
     z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 6px;
   }
   :global(.app.compact) .message {
     padding-left: 16px;

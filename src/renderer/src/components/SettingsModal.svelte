@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { DEFAULT_SETTINGS, FONT_SCALES, MAX_QUICK_REACTIONS } from '../../../shared/settings';
+  import { DEFAULT_SETTINGS, FONT_SCALES, MAX_QUICK_REACTIONS, SOUND_IDS, type SoundId } from '../../../shared/settings';
   import type { ThemeDef } from '../../../shared/theme';
   import { call } from '../lib/api';
+  import { canDecode, playSound, resetCustomSound, SOUND_LABELS } from '../lib/sound';
   import { settings } from '../stores/settings.svelte';
   import { themes } from '../stores/themes.svelte';
   import { ui } from '../stores/ui.svelte';
@@ -51,6 +52,49 @@
       detailsWidth: DEFAULT_SETTINGS.detailsWidth,
       sidebarCollapsed: false,
       detailsPref: 'auto'
+    });
+  }
+
+  const MAX_SOUND_BYTES = 5 * 1024 * 1024;
+  let soundInput = $state<HTMLInputElement | null>(null);
+
+  function preview(id: SoundId = settings.value.notificationSound): void {
+    void playSound(id, settings.value.soundVolume).catch(() => {});
+  }
+
+  function chooseSound(id: SoundId): void {
+    // Picking "Custom file" with none saved yet goes straight to the file picker.
+    if (id === 'custom' && !settings.value.customSoundName) {
+      soundInput?.click();
+      return;
+    }
+    void settings.update({ notificationSound: id });
+    preview(id);
+  }
+
+  async function onSoundFile(e: Event & { currentTarget: HTMLInputElement }): Promise<void> {
+    const file = e.currentTarget.files?.[0];
+    e.currentTarget.value = '';
+    if (!file) return;
+    if (file.size > MAX_SOUND_BYTES) return ui.toast('That sound file is too big (5 MB max)');
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (!(await canDecode(bytes))) return ui.toast("Couldn't play that file. Try an MP3, WAV or OGG.");
+    try {
+      await call('sound:setCustom', bytes);
+    } catch {
+      return ui.toast("Couldn't save the sound");
+    }
+    resetCustomSound();
+    await settings.update({ notificationSound: 'custom', customSoundName: file.name });
+    preview('custom');
+  }
+
+  async function removeCustomSound(): Promise<void> {
+    await call('sound:setCustom', null).catch(() => {});
+    resetCustomSound();
+    void settings.update({
+      customSoundName: null,
+      ...(settings.value.notificationSound === 'custom' ? { notificationSound: DEFAULT_SETTINGS.notificationSound } : {})
     });
   }
 
@@ -148,6 +192,52 @@
       {#if choosing !== null}
         <div class="quick-picker"><EmojiPicker onpick={chooseQuick} onclose={() => (choosing = null)} /></div>
       {/if}
+    </section>
+
+    <section>
+      <h3>Notifications</h3>
+      <div class="row">
+        <span>Message sound</span>
+        <select aria-label="Message sound" value={settings.value.notificationSound} onchange={(e) => chooseSound(e.currentTarget.value as SoundId)}>
+          {#each SOUND_IDS as id (id)}
+            <option value={id}>{SOUND_LABELS[id]}</option>
+          {/each}
+        </select>
+        <button class="secondary" disabled={settings.value.notificationSound === 'none'} onclick={() => preview()}>Play</button>
+      </div>
+      <label class="row">
+        <span>Volume</span>
+        <input
+          type="range"
+          aria-label="Sound volume"
+          min="0"
+          max="1"
+          step="0.05"
+          value={settings.value.soundVolume}
+          onchange={(e) => {
+            void settings.update({ soundVolume: Number(e.currentTarget.value) });
+            preview();
+          }}
+        />
+      </label>
+      <div class="row">
+        <span class="hint inline">Custom: {settings.value.customSoundName ?? 'none'}</span>
+        <button class="secondary" onclick={() => soundInput?.click()}>{settings.value.customSoundName ? 'Change file' : 'Choose file'}</button>
+        {#if settings.value.customSoundName}
+          <button class="secondary" onclick={() => void removeCustomSound()}>Remove</button>
+        {/if}
+        <input bind:this={soundInput} type="file" accept="audio/*" hidden onchange={(e) => void onSoundFile(e)} />
+      </div>
+      <p class="hint">Plays when someone messages you, unless the chat is muted or you're already looking at it.</p>
+    </section>
+
+    <section>
+      <h3>Window</h3>
+      <label class="row">
+        <input type="checkbox" checked={settings.value.closeToTray} onchange={(e) => void settings.update({ closeToTray: e.currentTarget.checked })} />
+        Close to tray
+      </label>
+      <p class="hint">Closing the window keeps IGchat running in the system tray. Quit from the tray icon's menu.</p>
     </section>
 
     <section>
@@ -335,6 +425,16 @@
     border: 1px solid var(--border);
     border-radius: 4px;
     background: var(--bg-input);
+  }
+  .hint.inline {
+    margin: 0;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .secondary:disabled {
+    opacity: 0.5;
   }
   .color {
     width: 64px;

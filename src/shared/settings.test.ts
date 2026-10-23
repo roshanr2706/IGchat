@@ -57,4 +57,14 @@ describe('quick reactions', () => {
     expect(sanitizeSettings({ quickReactions: ['nope'] }).quickReactions).toEqual(DEFAULT_SETTINGS.quickReactions);
     expect(sanitizeSettings({ quickReactions: 'x' }).quickReactions).toEqual(DEFAULT_SETTINGS.quickReactions);
   });
+
+  it('validates tray and sound settings', () => {
+    const d = sanitizeSettings({});
+    expect(d.closeToTray).toBe(true);
+    expect(d.notificationSound).toBe('chime');
+    const s = sanitizeSettings({ closeToTray: false, notificationSound: 'pop', soundVolume: 0.3, customSoundName: 'beep.mp3' });
+    expect([s.closeToTray, s.notificationSound, s.soundVolume, s.customSoundName]).toEqual([false, 'pop', 0.3, 'beep.mp3']);
+    const bad = sanitizeSettings({ closeToTray: 'yes', notificationSound: 'airhorn', soundVolume: 4, customSoundName: '' });
+    expect([bad.closeToTray, bad.notificationSound, bad.soundVolume, bad.customSoundName]).toEqual([true, 'chime', 1, null]);
+  });
 });

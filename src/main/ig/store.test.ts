@@ -13,6 +13,31 @@ beforeEach(() => {
   store = new IgStore();
 });
 
+describe('IgStore read receipts', () => {
+  const withWatermark = (wm: string) => ({
+    ...threadNodes[0],
+    slide_read_receipts: [
+      { participant_fbid: '900000000000001', watermark_timestamp_ms: '1792099000000' },
+      { participant_fbid: '900000000000002', watermark_timestamp_ms: wm }
+    ]
+  });
+
+  it("maps other participants' watermarks to their ids, stamping a live advance with the time it was seen", () => {
+    store.ingestThreads(threadNodes);
+    expect(store.thread(T1)?.readReceipts).toEqual([{ userId: '9000000002', watermark: 1792100000000, at: 1792100000000 }]);
+    vi.useFakeTimers({ now: 1792100500000 });
+    try {
+      store.ingestThreads([withWatermark('1792100200000')]);
+      expect(store.thread(T1)?.readReceipts).toEqual([{ userId: '9000000002', watermark: 1792100200000, at: 1792100500000 }]);
+      // A stale page never rolls it back.
+      store.ingestThreads([withWatermark('1792100000000')]);
+      expect(store.thread(T1)?.readReceipts?.[0]?.watermark).toBe(1792100200000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('IgStore threads', () => {
   it('ingests threads, learns the viewer and both thread ids, and emits only real changes', () => {
     const updates = vi.fn();

@@ -35,7 +35,7 @@ function createAdapter(): Bridge {
   const store = new SettingsStore(join(dir, 'settings.json'));
   const handlersByChannel = new Map<string, (...args: unknown[]) => unknown>();
   const ipc: IpcLike = { handle: (channel, listener) => handlersByChannel.set(channel, (...args) => listener({} as never, ...args)) };
-  registerIpc(ipc, createHandlers({ service, settings: store, getWindow: () => null, themesDir: join(dir, 'themes') }));
+  registerIpc(ipc, createHandlers({ service, settings: store, getWindow: () => null, themesDir: join(dir, 'themes'), soundFile: join(dir, 'sounds', 'custom') }));
 
   const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
   const sender = {

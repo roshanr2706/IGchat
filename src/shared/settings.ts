@@ -1,4 +1,6 @@
 export type DetailsPref = 'auto' | 'shown' | 'hidden';
+export type SoundId = 'chime' | 'pop' | 'ding' | 'bubble' | 'custom' | 'none';
+export const SOUND_IDS: readonly SoundId[] = ['chime', 'pop', 'ding', 'bubble', 'custom', 'none'];
 export type WindowColors = { base: string; titlebar: string; symbol: string };
 
 export type Settings = {
@@ -15,6 +17,14 @@ export type Settings = {
   windowColors: WindowColors;
   /** The one-click reactions on a message's hover bar and menu (1–8 emoji). */
   quickReactions: string[];
+  /** Closing the window hides it to the system tray instead of quitting. */
+  closeToTray: boolean;
+  /** Played for incoming messages; 'custom' plays the user's own file. */
+  notificationSound: SoundId;
+  /** 0–1. */
+  soundVolume: number;
+  /** File name of the user's custom sound, for display; null when none is set. */
+  customSoundName: string | null;
 };
 
 export const MAX_QUICK_REACTIONS = 8;
@@ -51,7 +61,11 @@ export const DEFAULT_SETTINGS: Settings = {
   sidebarCollapsed: false,
   detailsPref: 'auto',
   windowColors: { base: '#313338', titlebar: '#1e1f22', symbol: '#dbdee1' },
-  quickReactions: QUICK_DEFAULT
+  quickReactions: QUICK_DEFAULT,
+  closeToTray: true,
+  notificationSound: 'chime',
+  soundVolume: 0.6,
+  customSoundName: null
 };
 
 const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n));
@@ -77,6 +91,10 @@ export function sanitizeSettings(input: unknown): Settings {
       titlebar: isHex(wc.titlebar) ? wc.titlebar : d.windowColors.titlebar,
       symbol: isHex(wc.symbol) ? wc.symbol : d.windowColors.symbol
     },
-    quickReactions: quickReactions(o.quickReactions)
+    quickReactions: quickReactions(o.quickReactions),
+    closeToTray: bool(o.closeToTray, d.closeToTray),
+    notificationSound: SOUND_IDS.includes(o.notificationSound as SoundId) ? (o.notificationSound as SoundId) : d.notificationSound,
+    soundVolume: clamp(num(o.soundVolume, d.soundVolume), 0, 1),
+    customSoundName: typeof o.customSoundName === 'string' && o.customSoundName.length > 0 ? o.customSoundName.slice(0, 200) : null
   };
 }

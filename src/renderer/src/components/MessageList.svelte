@@ -2,9 +2,11 @@
   import { untrack } from 'svelte';
   import type { Thread, User } from '../../../shared/types';
   import { buildRows } from '../lib/grouping';
+  import { readLabels } from '../lib/receipts';
   import { formatDayLabel } from '../lib/time';
   import { inbox } from '../stores/inbox.svelte';
   import { messages } from '../stores/messages.svelte';
+  import { ui } from '../stores/ui.svelte';
   import MessageItem from './MessageItem.svelte';
 
   type Props = { thread: Thread };
@@ -16,6 +18,7 @@
   const rows = $derived(
     st ? buildRows(st.messages, { firstUnreadId: st.firstUnreadId, dayLabel: (ts) => formatDayLabel(ts, Date.now()) }) : []
   );
+  const reads = $derived(st ? readLabels(thread, st.messages, myId, users, ui.now) : new Map<string, string>());
   // The scroller is column-reverse (pins to the bottom for free), so the newest row comes first in the DOM.
   const reversed = $derived([...rows].reverse());
 
@@ -56,7 +59,7 @@
       {:else if row.type === 'unread'}
         <div class="unread-marker"><span>NEW</span></div>
       {:else}
-        <MessageItem message={row.message} showHeader={row.showHeader} {thread} {users} {myId} />
+        <MessageItem message={row.message} showHeader={row.showHeader} {thread} {users} {myId} readLabel={reads.get(row.message.id) ?? null} />
       {/if}
     {/each}
     {#if st?.loadingOlder}<div class="status">Loading older messages…</div>{/if}

@@ -21,7 +21,15 @@ export type Thread = {
   unread: boolean;
   muted: boolean;
   avatarUrls: string[];
+  /** How far each other participant has read. Missing when unknown (e.g. an older cached inbox). */
+  readReceipts?: ReadReceipt[];
 };
+
+/**
+ * `watermark`: the newest message timestamp the participant has read up to. `at`: when they read it: the moment
+ * IGchat saw the watermark advance, or the watermark itself when it was already there on first sight.
+ */
+export type ReadReceipt = { userId: string; watermark: number; at: number };
 
 export type Reaction = { emoji: string; userIds: string[] };
 export type ReplyRef = { messageId: string; senderId: string; preview: string };

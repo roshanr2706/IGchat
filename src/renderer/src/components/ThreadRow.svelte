@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Thread } from '../../../shared/types';
   import { formatRelativeShort } from '../lib/time';
+  import { ui } from '../stores/ui.svelte';
   import Avatar from './Avatar.svelte';
 
   type Props = { thread: Thread; active: boolean; rail: boolean; onselect: (id: string) => void };
@@ -14,26 +15,27 @@
   class:rail
   title={rail ? thread.title : undefined}
   aria-current={active ? 'page' : undefined}
+  aria-label={thread.unread ? `${thread.title} (unread)` : undefined}
   onclick={() => onselect(thread.id)}
 >
+  {#if thread.unread}<span class="pill" aria-hidden="true"></span>{/if}
   <span class="av">
     <Avatar urls={thread.avatarUrls} name={thread.title} size={rail ? 44 : 32} />
-    {#if thread.unread}<span class="dot" aria-label="Unread"></span>{/if}
+    {#if thread.unread && rail}<span class="dot" aria-hidden="true"></span>{/if}
   </span>
   {#if !rail}
-    <span class="text">
-      <span class="title">
-        {thread.title}
-        {#if thread.muted}<span class="muted" title="Muted">🔕</span>{/if}
-      </span>
-      <span class="preview">{thread.lastMessagePreview}</span>
+    <span class="title">
+      {thread.title}
+      {#if thread.muted}<span class="muted" title="Muted">🔕</span>{/if}
     </span>
-    <span class="time">{formatRelativeShort(thread.lastActivityAt, Date.now())}</span>
+    <span class="time">{formatRelativeShort(thread.lastActivityAt, Math.max(ui.now, thread.lastActivityAt))}</span>
+    {#if thread.unread}<span class="badge" aria-hidden="true"></span>{/if}
   {/if}
 </button>
 
 <style>
   .row {
+    position: relative;
     width: 100%;
     display: flex;
     align-items: center;
@@ -44,7 +46,7 @@
     color: var(--text-muted);
     text-align: left;
     content-visibility: auto;
-    contain-intrinsic-size: auto 46px;
+    contain-intrinsic-size: auto 44px;
   }
   .row:hover {
     background: var(--bg-hover);
@@ -54,14 +56,37 @@
     background: var(--bg-active);
     color: var(--text-header);
   }
-  .row.unread .title {
+  .row.unread {
     color: var(--text-header);
-    font-weight: 600;
+  }
+  .row.unread .title {
+    font-weight: 700;
+  }
+  .row.unread .time {
+    font-weight: 700;
+    color: var(--accent);
+  }
+  /* Discord-style marker on the row's left edge (inside it: content-visibility clips anything outside). */
+  .pill {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: 4px;
+    height: 10px;
+    border-radius: 0 4px 4px 0;
+    background: var(--text-header);
+    transform: translateY(-50%);
+  }
+  .row.unread:hover .pill {
+    height: 20px;
   }
   .row.rail {
     justify-content: center;
     padding: 4px 0;
     border-radius: 0;
+  }
+  .row.rail .pill {
+    height: 12px;
   }
   .row.rail:hover,
   .row.rail.active {
@@ -79,40 +104,35 @@
   }
   .dot {
     position: absolute;
-    right: -2px;
-    bottom: -2px;
-    width: 12px;
-    height: 12px;
+    right: -3px;
+    bottom: -3px;
+    width: 16px;
+    height: 16px;
     border-radius: 50%;
     background: var(--accent);
-    border: 2px solid var(--bg-sidebar);
+    border: 3px solid var(--bg-sidebar);
   }
-  .text {
+  .title {
     flex: 1;
     min-width: 0;
-    display: flex;
-    flex-direction: column;
-  }
-  .title,
-  .preview {
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
-  }
-  .title {
     font-size: 0.95rem;
-  }
-  .preview {
-    font-size: 0.8rem;
-    opacity: 0.85;
   }
   .muted {
     font-size: 0.7rem;
   }
   .time {
     flex: none;
-    align-self: flex-start;
-    margin-top: 2px;
     font-size: 0.7rem;
+  }
+  .badge {
+    flex: none;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
   }
 </style>

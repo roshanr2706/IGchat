@@ -35,6 +35,9 @@ export interface InvokeMap {
   'themes:listCustom': () => CustomThemes;
   'themes:openFolder': () => void;
   'shell:openExternal': (url: string) => void;
+  /** Stores the user's custom notification sound (null removes it). */
+  'sound:setCustom': (bytes: Uint8Array | null) => void;
+  'sound:getCustom': () => Uint8Array | null;
 }
 export type InvokeChannel = keyof InvokeMap;
 export type InvokeArgs<C extends InvokeChannel> = Parameters<InvokeMap[C]>;
@@ -75,7 +78,9 @@ export const INVOKE_CHANNELS = [
   'settings:set',
   'themes:listCustom',
   'themes:openFolder',
-  'shell:openExternal'
+  'shell:openExternal',
+  'sound:setCustom',
+  'sound:getCustom'
 ] as const satisfies readonly InvokeChannel[];
 
 export const EVENT_CHANNELS = ['inbox:updated', 'msg:new', 'msg:updated', 'msg:removed', 'sync:status'] as const satisfies readonly EventChannel[];

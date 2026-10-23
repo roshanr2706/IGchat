@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, session, shell, type Tray } from 'electron';
 import { join } from 'node:path';
 import { SETTINGS_SYNC_CHANNEL } from '../shared/ipc';
 import type { ChatService } from './chatService';
@@ -11,6 +11,7 @@ import { handleMediaRequests, registerMediaScheme } from './media/protocol';
 import { MockChatService } from './mock/mockService';
 import { SettingsStore } from './settingsStore';
 import { startupPayload } from './startupPayload';
+import { createTray } from './tray';
 
 function start(): void {
   const settings = new SettingsStore(join(app.getPath('userData'), 'settings.json'));
@@ -28,7 +29,18 @@ function start(): void {
         onLogout: () => mediaCache.clear()
       }).service;
   let mainWindow: BrowserWindow | null = null;
+  let tray: Tray | null = null;
+  // Set once the user really means to quit (tray menu, OS shutdown), so close-to-tray lets the window go.
+  let quitting = false;
   const themesDir = join(app.getPath('userData'), 'themes');
+  const soundFile = join(app.getPath('userData'), 'sounds', 'custom');
+
+  function showWindow(): void {
+    if (!mainWindow) mainWindow = createWindow();
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  }
 
   function createWindow(): BrowserWindow {
     const { windowColors } = settings.get();
@@ -49,6 +61,11 @@ function start(): void {
       }
     });
     win.once('ready-to-show', () => win.show());
+    win.on('close', (event) => {
+      if (quitting || !tray || !settings.get().closeToTray) return;
+      event.preventDefault();
+      win.hide();
+    });
     win.on('closed', () => {
       if (mainWindow === win) mainWindow = null;
       // The hidden engine window would otherwise keep the app alive.
@@ -69,14 +86,12 @@ function start(): void {
   });
   registerIpc(
     ipcMain,
-    createHandlers({ service, settings, getWindow: () => mainWindow, themesDir })
+    createHandlers({ service, settings, getWindow: () => mainWindow, themesDir, soundFile })
   );
   forwardEvents(service, () => mainWindow?.webContents ?? null);
 
   app.on('second-instance', () => {
-    if (!mainWindow) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
+    if (mainWindow) showWindow();
   });
 
   app.whenReady().then(() => {
@@ -86,6 +101,13 @@ function start(): void {
     // Media is fetched with the engine's session, as the Instagram page's own image loads are.
     handleMediaRequests(session.defaultSession, session.fromPartition(ENGINE_PARTITION), mediaCache);
     mainWindow = createWindow();
+    tray = createTray({
+      show: showWindow,
+      quit: () => {
+        quitting = true;
+        app.quit();
+      }
+    });
     service.start();
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow();
@@ -93,7 +115,10 @@ function start(): void {
   });
 
   // stop() also flushes the debounced inbox cache write.
-  app.on('before-quit', () => service.stop());
+  app.on('before-quit', () => {
+    quitting = true;
+    service.stop();
+  });
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
   });

@@ -1,4 +1,5 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { shell, type BrowserWindow } from 'electron';
 import type { InvokeArgs, InvokeChannel, InvokeReturn } from '../shared/ipc';
 import type { ChatService } from './chatService';
@@ -6,6 +7,8 @@ import { loadCustomThemes } from './customThemes';
 import type { SettingsStore } from './settingsStore';
 
 export const TITLEBAR_HEIGHT = 32;
+/** Custom notification sounds are short clips; anything bigger is refused. */
+export const MAX_SOUND_BYTES = 5 * 1024 * 1024;
 
 export type Handlers = {
   [C in InvokeChannel]: (...args: InvokeArgs<C>) => Promise<InvokeReturn<C>> | InvokeReturn<C>;
@@ -16,9 +19,11 @@ export type HandlerDeps = {
   settings: SettingsStore;
   getWindow: () => BrowserWindow | null;
   themesDir: string;
+  /** Where the user's custom notification sound is kept. */
+  soundFile: string;
 };
 
-export function createHandlers({ service, settings, getWindow, themesDir }: HandlerDeps): Handlers {
+export function createHandlers({ service, settings, getWindow, themesDir, soundFile }: HandlerDeps): Handlers {
   return {
     'session:me': () => service.me(),
     'inbox:get': () => service.getInbox(),
@@ -59,6 +64,22 @@ export function createHandlers({ service, settings, getWindow, themesDir }: Hand
     },
     'shell:openExternal': async (url) => {
       if (/^https:\/\//i.test(url)) await shell.openExternal(url);
+    },
+    'sound:setCustom': (bytes) => {
+      if (!bytes) {
+        rmSync(soundFile, { force: true });
+        return;
+      }
+      if (!(bytes instanceof Uint8Array) || bytes.byteLength > MAX_SOUND_BYTES) throw new Error('Sound file is too large (5 MB max)');
+      mkdirSync(dirname(soundFile), { recursive: true });
+      writeFileSync(soundFile, bytes);
+    },
+    'sound:getCustom': () => {
+      try {
+        return new Uint8Array(readFileSync(soundFile));
+      } catch {
+        return null;
+      }
     }
   };
 }

@@ -289,8 +289,22 @@ export class MockChatService implements ChatService {
     const t = this.thread(threadId);
     t.lastActivityAt = msg.timestamp;
     t.lastMessagePreview = threadPreview(msg);
-    if (incoming) t.unread = true;
+    if (incoming) {
+      t.unread = true;
+      // Writing back means they read everything before it.
+      this.markRead(t, msg.senderId, msg.timestamp);
+    } else if (this.latencyMs > 0) {
+      // Pretend the other side reads it a few seconds later.
+      const reader = t.participants[0];
+      if (reader) setTimeout(() => this.markRead(t, reader.id, msg.timestamp, true), 3000).unref?.();
+    }
     this.events.emit('inbox:updated', clone([t]));
+  }
+
+  private markRead(t: Thread, userId: string, watermark: number, announce = false): void {
+    const receipts = (t.readReceipts ?? []).filter((r) => r.userId !== userId);
+    t.readReceipts = [...receipts, { userId, watermark, at: this.now() }];
+    if (announce) this.events.emit('inbox:updated', clone([t]));
   }
 
   private refreshPreview(threadId: string): void {

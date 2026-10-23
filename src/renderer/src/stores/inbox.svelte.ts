@@ -1,5 +1,9 @@
 import type { SyncStatus, Thread, User } from '../../../shared/types';
 import { call, on } from '../lib/api';
+import { playSound } from '../lib/sound';
+import { settings } from './settings.svelte';
+
+const SOUND_GAP_MS = 1500;
 
 export function sortThreads(threads: Thread[]): Thread[] {
   return [...threads].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
@@ -82,8 +86,26 @@ class InboxStore {
     }
   }
 
-  applyUpdates(updated: Thread[]): void {
+  private lastSoundAt = 0;
+
+  /** A thread update that means someone just wrote to you (not your own send, not a page of older threads). */
+  private isIncoming(t: Thread, prev: Thread | undefined): boolean {
+    if (!t.unread || t.muted) return false;
+    if (t.id === this.activeId && typeof document !== 'undefined' && document.hasFocus()) return false;
+    return prev ? t.lastActivityAt > prev.lastActivityAt : Date.now() - t.lastActivityAt < 60_000;
+  }
+
+  private notify(): void {
+    const now = Date.now();
+    if (now - this.lastSoundAt < SOUND_GAP_MS) return;
+    this.lastSoundAt = now;
+    void playSound(settings.value.notificationSound, settings.value.soundVolume).catch(() => {});
+  }
+
+  /** `live`: pushed by main as it happened (may play the notification sound), rather than fetched on request. */
+  applyUpdates(updated: Thread[], live = false): void {
     const byId = new Map(this.threads.map((t) => [t.id, t]));
+    if (live && updated.some((t) => this.isIncoming(t, byId.get(t.id)))) this.notify();
     for (const t of updated) {
       if (t.id === this.activeId && t.unread) {
         byId.set(t.id, { ...t, unread: false });
@@ -111,7 +133,7 @@ class InboxStore {
   subscribe(): () => void {
     const offs = [
       on('inbox:updated', (threads) => {
-        this.applyUpdates(threads);
+        this.applyUpdates(threads, true);
         void this.ensureMe();
       }),
       on('sync:status', (status) => {
